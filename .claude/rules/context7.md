@@ -1,0 +1,1 @@
+Use Context7 by default whenever I ask for code generation, setup/configuration instructions, or library/API documentation - automatically call the Context7 MCP tools to resolve the library ID and fetch its docs, without waiting for me to request it.

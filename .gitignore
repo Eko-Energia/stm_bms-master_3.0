@@ -111,3 +111,8 @@ dkms.conf
 # OS
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
