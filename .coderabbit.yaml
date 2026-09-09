@@ -1,0 +1,115 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+# CodeRabbit is an AI-powered code reviewer that cuts review time and bugs in half
+
+language: en-US
+early_access: false
+reviews:
+  profile: chill
+  # Skip vendor HAL/CMSIS, CubeMX build output, and IDE/project metadata.
+  path_filters:
+    - '!Drivers/**'
+    - '!Core/Startup/**'
+    - '!Core/Src/system_stm32f1xx.c'
+    - '!Core/Src/syscalls.c'
+    - '!Core/Src/sysmem.c'
+    - '!Core/Inc/stm32f1xx_hal_conf.h'
+    - '!Debug/**'
+    - '!Release/**'
+    - '!.settings/**'
+    - '!.cproject'
+    - '!.project'
+    - '!.mxproject'
+    - '!*.launch'
+    - '!*.elf'
+    - '!*.bin'
+    - '!*.hex'
+    - '!*.map'
+    - '!*.list'
+    - '!*.o'
+    - '!*.d'
+    - '!*.su'
+    - '!*.cyclo'
+    - '!*.mk'
+    - '!*.a'
+    - '!*.log'
+    - '!.vscode/**'
+    - '!.idea/**'
+    - '!.agents/**'
+    - '!.agent/**'
+    - '!.cursor/**'
+    - '!.claude/**'
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: true
+  review_status: true
+  collapse_walkthrough: false
+  path_instructions:
+    - path: 'EKO_Drivers/**/*.{c,h}'
+      instructions: >-
+        This is the hand-written application driver layer for an STM32F105 BMS master
+        (bare-metal C on STM32 HAL, no RTOS). Review for embedded C correctness:
+        every HAL_* call's HAL_StatusTypeDef must be checked or its omission must be
+        deliberate; no blocking waits, printf, or dynamic allocation (malloc/free) on
+        any path reachable from an interrupt; state shared between an ISR and main
+        context must be volatile and accessed atomically or under a critical section;
+        fixed-width types (uint8_t/uint16_t/int32_t) rather than bare int/long;
+        explicit bounds on every buffer index and memcpy length, especially CAN
+        payloads (max 8 bytes) and UART receive buffers; watch for integer overflow,
+        signedness mismatches, and implicit narrowing in scaling and unit conversion
+        arithmetic; verify unit and scaling factors against docs/can.md,
+        docs/adc.md, docs/measurements.md, and docs/pwmGeneration.md; headers must be
+        self-contained with include guards and no definitions in headers. Flag any
+        deviation.
+    - path: 'Core/Src/*.c'
+      instructions: >-
+        These are STM32CubeMX-generated files. Only review code inside USER CODE
+        BEGIN/END sections, and verify that hand-written code stays inside them —
+        anything added outside a USER CODE section will be lost on the next CubeMX
+        regeneration, so flag it. Do not comment on the style, naming, or structure of
+        generated code. Application state machines and business logic do not belong
+        here; suggest moving them to EKO_Drivers. Peripheral init values (clocks,
+        prescalers, pin modes, ADC/CAN/TIM/UART settings) must match BMS-Master.ioc —
+        flag hand edits that drift from the .ioc, since regeneration will revert them.
+    - path: 'Core/Src/stm32f1xx_it.c'
+      instructions: >-
+        Interrupt handlers. Keep ISR bodies minimal: no blocking calls, no HAL_Delay,
+        no printf, no dynamic allocation, no long loops. Flags set here and read from
+        main context must be volatile. Verify every enabled interrupt in
+        BMS-Master.ioc has a handler and that handlers clear their pending flags.
+    - path: 'Core/Inc/*.h'
+      instructions: >-
+        Generated CubeMX headers. Only review USER CODE sections. Pin and peripheral
+        handle labels must match BMS-Master.ioc and docs/pcb.md.
+    - path: 'docs/**/*.md'
+      instructions: >-
+        Project documentation. Filenames use lowercase-first camelCase with a .md
+        extension — flag deviations. Documentation must clearly distinguish reference
+        behavior (documented but not implemented in this project) from behavior
+        actually present in the code. Pin, peripheral, frame format, and scaling
+        details must match BMS-Master.ioc and the source; flag drift. New documents
+        should be linked from docs/index.md.
+    - path: '*.ioc'
+      instructions: >-
+        BMS-Master.ioc is the source of truth for hardware configuration. Summarize
+        which pins, peripherals, clocks, or DMA streams changed, and flag any change
+        not reflected in the corresponding generated Core/ code or in docs/pcb.md.
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - WIP
+      - DO NOT MERGE
+      - DRAFT
+    drafts: true
+  tools:
+    cppcheck:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+chat:
+  auto_reply: true

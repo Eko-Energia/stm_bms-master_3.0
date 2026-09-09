@@ -18,6 +18,9 @@
 .dbc
 Debug/*
 Release/*
+bin/
+obj/
+tests/
 *.elf
 *.list
 *.map
@@ -30,3 +33,81 @@ Release/*
 *.mk
 *.scratch
 tools/*
+*.launch
+*.uvgui.* (for Keil)
+*.bak
+
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Linker output
+*.ilk
+*.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# debug information files
+*.dwo
+
+# Claude Code local settings
+/.claude/settings.local.json
+
+# Superpowers docs
+/docs/superpowers/
+
+# Superpowers subagent-driven-development scratch (briefs, diffs, progress ledger)
+/.superpowers/
+
+# Agent scratch, kept local by design: implementation plans for one ticket and
+# CodeRabbit triage tables for one PR round. The durable record of a decision
+# belongs in Linear and in docs/adr/, not in a plan file.
+/.claude/plans/
+/.claude/reviews/
+
+# OS
+.DS_Store
+Thumbs.db
