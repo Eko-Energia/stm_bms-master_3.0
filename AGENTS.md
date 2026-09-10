@@ -27,6 +27,10 @@ This file is the navigation guide for AI assistants working on `stm_bms-master_3
 6. Preserve the existing camelCase naming convention for documentation filenames and the lowercase `docs` directory.
 7. After code changes, update the related documentation when the public behavior, pinout, frame format, or calculation changes.
 8. CAN frame C sources are generated from `docs/CAN-DATABASE/*.dbc` by the team's cantools fork, never hand-written. Regenerate using `docs/canDatabase.md`; do not edit generated output, and do not edit the `.dbc` files from this repository.
+9. Keep code simple, easily readable, not overengineered but still fast and optimized.
+10. Keep comments short and meaningful, avoid essay-style and storytelling - hard facts easy to understand.
+11. While using floating point operations, try to use integrated FPU if available. Always use float instead of double. If available use float functions instead of double ones, e.g. `powf()` instead of `pow()`.
+12. Never use constants and variables bigger than 32 bits, try to optimize their size so that we save the memory.
 
 ## Validation expectations
 
