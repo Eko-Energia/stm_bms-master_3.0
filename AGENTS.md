@@ -12,6 +12,7 @@ This file is the navigation guide for AI assistants working on `stm_bms-master_3
 | CAN frames, identifiers, payload packing, scheduling, or reception | `docs/can.md`, then `EKO_Drivers/CAN/Inc/can_driver.h` |
 | JK BMS, UART, RS485 direction, request/response, or received data | `docs/bmsJk.md`, then `Core/Src/usart.c` and `Core/Src/gpio.c` |
 | Overall project structure or generated-versus-application code boundaries | `docs/projectOverview.md` |
+| Building, flashing, serial exchanges, or memory reads driven from an AI session | `docs/stm32Mcp.md` |
 | Documentation navigation or available project documents | `docs/index.md` |
 
 ## Project rules

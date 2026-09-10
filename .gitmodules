@@ -1,0 +1,3 @@
+[submodule ".claude/mcp/stm32-mcp"]
+	path = .claude/mcp/stm32-mcp
+	url = https://github.com/shieldyguy/stm32-mcp.git

@@ -1,0 +1,22 @@
+# Environment definition for the stm32-mcp server used by this project.
+#
+# The upstream checkout in ./stm32-mcp is left untouched so it stays `git pull`-able.
+# This wrapper exists to pin `mcp<2`: upstream declares `mcp>=1.0.0`, but the 2.x
+# SDK renamed FastMCP to MCPServer, so an unconstrained resolve installs an SDK the
+# server cannot import. Sync with: uv sync --project .claude/mcp
+
+[project]
+name = "bms-master-stm32-mcp"
+version = "0.0.0"
+description = "Pinned environment for the stm32-mcp server (see docs/stm32Mcp.md)"
+requires-python = ">=3.10"
+dependencies = [
+    "stm32-mcp",
+    "mcp<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+stm32-mcp = { path = "stm32-mcp", editable = true }

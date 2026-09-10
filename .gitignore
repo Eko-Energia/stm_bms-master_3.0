@@ -116,3 +116,5 @@ Thumbs.db
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+# stm32-mcp server environment (the checkout itself is a submodule, see docs/stm32Mcp.md)
+/.claude/mcp/.venv/

@@ -11,6 +11,7 @@ This directory documents `stm_bms-master_3.0` and the reference application in `
 - [BMS-JK communication](bmsJk.md)
 - [CAN frames and driver integration](can.md)
 - [PCB pinout](pcb.md)
+- [stm32-mcp hardware server](stm32Mcp.md)
 
 ## Project boundary
 

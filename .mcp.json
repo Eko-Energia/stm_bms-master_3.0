@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "stm32": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "${CLAUDE_PROJECT_DIR:-.}/.claude/mcp",
+        "stm32-mcp"
+      ]
+    }
+  }
+}

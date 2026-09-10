@@ -22,5 +22,30 @@
         "repo": "EveryInc/compound-engineering-plugin"
       }
     }
+  },
+  "enabledMcpjsonServers": [
+    "stm32"
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__stm32__stm32_list_probes",
+      "mcp__stm32__stm32_board_info",
+      "mcp__stm32__serial_list_ports",
+      "mcp__stm32__stm32_build",
+      "mcp__stm32__stm32_read_memory",
+      "mcp__stm32__live_memory_read"
+    ],
+    "ask": [
+      "mcp__stm32__stm32_flash",
+      "mcp__stm32__stm32_build_and_flash",
+      "mcp__stm32__stm32_write_memory",
+      "mcp__stm32__serial_send",
+      "mcp__stm32__serial_sequence"
+    ],
+    "deny": [
+      "mcp__stm32__stm32_fus_upgrade",
+      "mcp__stm32__stm32_ble_stack_install",
+      "mcp__stm32__stm32_fus_bootstrap"
+    ]
   }
 }
