@@ -118,3 +118,7 @@ Thumbs.db
 !.vscode/extensions.json
 # stm32-mcp server environment (the checkout itself is a submodule, see docs/stm32Mcp.md)
 /.claude/mcp/.venv/
+
+# cantools fork + its uv environment, bootstrapped on demand (see docs/canDatabase.md).
+# Deliberately not a submodule: it is a build-time tool, not a project dependency.
+/.claude/tmp/

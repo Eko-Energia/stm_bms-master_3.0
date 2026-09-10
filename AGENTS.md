@@ -10,9 +10,11 @@ This file is the navigation guide for AI assistants working on `stm_bms-master_3
 | ADC setup, raw conversion, voltage, temperature, or current logic | `docs/adc.md`, then `docs/measurements.md` |
 | Relay PWM output, duty cycle, timer configuration, or PWM input | `docs/pwmGeneration.md` |
 | CAN frames, identifiers, payload packing, scheduling, or reception | `docs/can.md`, then `EKO_Drivers/CAN/Inc/can_driver.h` |
+| DBC contents, node/signal names, or regenerating CAN C sources | `docs/canDatabase.md`, then `docs/CAN-DATABASE/*.dbc` |
 | JK BMS, UART, RS485 direction, request/response, or received data | `docs/bmsJk.md`, then `Core/Src/usart.c` and `Core/Src/gpio.c` |
 | Overall project structure or generated-versus-application code boundaries | `docs/projectOverview.md` |
 | Building, flashing, serial exchanges, or memory reads driven from an AI session | `docs/stm32Mcp.md` |
+| Original product requirements, intended feature set, or scope questions | `docs/notionSpec.md` |
 | Documentation navigation or available project documents | `docs/index.md` |
 
 ## Project rules
@@ -24,6 +26,7 @@ This file is the navigation guide for AI assistants working on `stm_bms-master_3
 5. Distinguish documented reference behavior from code that is currently present in `stm_bms-master_3.0`.
 6. Preserve the existing camelCase naming convention for documentation filenames and the lowercase `docs` directory.
 7. After code changes, update the related documentation when the public behavior, pinout, frame format, or calculation changes.
+8. CAN frame C sources are generated from `docs/CAN-DATABASE/*.dbc` by the team's cantools fork, never hand-written. Regenerate using `docs/canDatabase.md`; do not edit generated output, and do not edit the `.dbc` files from this repository.
 
 ## Validation expectations
 
