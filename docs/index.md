@@ -16,6 +16,7 @@ It also holds `CAN-DATABASE/`, a git submodule pinning the team's `.dbc` files. 
 - [CAN database and C source generation](canDatabase.md)
 - [PCB pinout](pcb.md)
 - [stm32-mcp hardware server](stm32Mcp.md)
+- [Claude Code plugins](claudePlugins.md)
 - [Notion source specification](notionSpec.md)
 
 ## Project boundary

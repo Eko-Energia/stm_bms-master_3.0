@@ -15,6 +15,7 @@ This file is the navigation guide for AI assistants working on `stm_bms-master_3
 | Overall project structure or generated-versus-application code boundaries | `docs/projectOverview.md` |
 | Building, flashing, serial exchanges, or memory reads driven from an AI session | `docs/stm32Mcp.md` |
 | Original product requirements, intended feature set, or scope questions | `docs/notionSpec.md` |
+| Claude Code plugin set, installing project plugins, or plugin load errors | `docs/claudePlugins.md` |
 | Documentation navigation or available project documents | `docs/index.md` |
 
 ## Project rules
