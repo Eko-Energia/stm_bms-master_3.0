@@ -13,3 +13,20 @@ const uint16_t calibNtcCount[101] = {
     3632, 3643, 3653, 3663, 3674, 3683, 3693, 3702, 3711, 3720,
     3728
 };
+
+/*
+ * countToCenti divides by the gap between adjacent entries, so the table must
+ * be strictly increasing. The values are slated for recalibration at bring-up
+ * by hand, which is exactly when a flat or inverted pair gets introduced, so
+ * app.c checks this at init rather than trusting the table.
+ *
+ * Not a _Static_assert: reading a const array is not an integer constant
+ * expression in C, and the workarounds all duplicate the 101 values.
+ */
+bool CALIB_NtcCountIsMonotonic(void)
+{
+    for (uint8_t i = 0u; i < 100u; i++) {
+        if (calibNtcCount[i + 1u] <= calibNtcCount[i]) { return false; }
+    }
+    return true;
+}

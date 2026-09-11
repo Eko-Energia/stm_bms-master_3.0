@@ -345,6 +345,13 @@ The values shipped are the reference ones from `docs/adc.md` and Bartek's table,
 **uncalibrated**; the header says so. The table is `extern` rather than defined in the header so
 only one translation unit carries the 202 bytes.
 
+The interpolation divides by the gap between adjacent entries, so the table must be **strictly
+increasing**. `initAll()` checks it with `CALIB_NtcCountIsMonotonic()` and reaches
+`Error_Handler()` (code 10) if it is not - the hand edit at bring-up is exactly when a flat or
+inverted pair appears. `_Static_assert` cannot see it: reading a `const` array is not an integer
+constant expression in C, and every workaround duplicates all 101 values. `countToCenti` also
+clamps to the lower entry's degree if a gap is ever zero, so the division cannot trap.
+
 ### 5.4 Temperature
 
 The NTC is on the **high side**, with a fixed 10 k to ground: `Rt = 10000 x (Vcc/V - 1)`
@@ -755,7 +762,8 @@ Two exceptions, both because the judgement spans more than one module:
 - **Code 9** `CAN1_TX_FAIL` is also raised by `app_can` when `CAN_AddScheduledMsg` rejects a
   frame at init, since a frame that never registered will never transmit.
 - **Code 10** `BMS_ERR_FATAL_INIT` is raised by `App_OnFatalError()` (`app.c`), the `main.c`
-  fallback called from `Error_Handler()`. It exists because, without it, `App_OnFatalError` had
+  fallback called from `Error_Handler()`. `initAll()`'s NTC table check (section 5.3) is one of
+  its call sites. It exists because, without it, `App_OnFatalError` had
   no code of its own and reported an unrelated CAN fault code even when the failure was an ADC
   or other peripheral init failure - code 10 names the failure for what it is: reaching
   `Error_Handler()` at all. If `EH_isInitialized()` is false (CAN1 itself never came up), only

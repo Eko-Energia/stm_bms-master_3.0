@@ -1,5 +1,6 @@
 #ifndef BMS_CALIB_H
 #define BMS_CALIB_H
+#include <stdbool.h>
 #include <stdint.h>
 
 /*
@@ -17,5 +18,9 @@
 /* ADC count per degree C, 0 to 100, monotonically increasing. Provenance and
    the count-indexed rationale are in docs/adc.md. */
 extern const uint16_t calibNtcCount[101];
+
+/** @brief True when calibNtcCount is strictly increasing, which is what keeps
+ *         the temperature interpolation's divisor non-zero. Checked at init. */
+bool CALIB_NtcCountIsMonotonic(void);
 
 #endif /* BMS_CALIB_H */

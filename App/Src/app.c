@@ -6,6 +6,7 @@
 #include "app_therm.h"
 #include "app_thermal.h"
 #include "app_timing.h"
+#include "bms_calib.h"
 #include "bms_errors.h"
 #include "CAN_DB.h"
 #include "error_handler.h"
@@ -98,6 +99,10 @@ static void initAll(void)
        the next line onward. */
     CAN_App_Init(&hcan1, &hcan2, &eh);
     EH_init(&eh, &hcan1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
+
+    /* A hand edit at bring-up that breaks the NTC table's strict ordering
+       would divide by zero in the temperature interpolation; code 10. */
+    if (!CALIB_NtcCountIsMonotonic()) { Error_Handler(); }
 
     if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK) { Error_Handler(); }
     ADC_Init(adcBuf, &eh);

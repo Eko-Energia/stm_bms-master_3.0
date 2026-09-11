@@ -52,6 +52,19 @@ static int errorIndex(uint16_t code)
     return -1;
 }
 
+TEST(the_ntc_table_is_strictly_increasing)
+{
+    /* countToCenti divides by the gap between adjacent entries. The table is
+       slated for recalibration at bring-up by hand, so this is where a flat or
+       inverted pair has to be caught. app.c calls the same helper at init. */
+    int firstBad = -1;
+    for (int i = 0; i < 100; i++) {
+        if (calibNtcCount[i + 1] <= calibNtcCount[i]) { firstBad = i; break; }
+    }
+    CHECK_EQ(firstBad, -1);                  /* index where the table stops rising */
+    CHECK(CALIB_NtcCountIsMonotonic());
+}
+
 TEST(the_filter_is_correct_from_the_first_sample_onward)
 {
     setup();
@@ -289,7 +302,8 @@ TEST(the_liveness_check_survives_the_tick_wrap)
 
 int main(void)
 {
-    RUN(the_filter_is_correct_from_the_first_sample_onward);
+    RUN(the_ntc_table_is_strictly_increasing);
+RUN(the_filter_is_correct_from_the_first_sample_onward);
 RUN(not_ready_until_the_window_has_filled);
     RUN(trimmed_mean_discards_a_single_outlier_entirely);
     RUN(pack_voltage_converts_with_rounding);

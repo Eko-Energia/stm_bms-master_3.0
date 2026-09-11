@@ -89,6 +89,7 @@ static uint16_t countToCenti(uint16_t count)
         if (count < calibNtcCount[i + 1u]) {
             const uint16_t lo   = calibNtcCount[i];
             const uint16_t span = (uint16_t)(calibNtcCount[i + 1u] - lo);
+            if (span == 0u) { return (uint16_t)((uint32_t)i * 100u); }   /* table not monotonic */
             const uint32_t frac = ((uint32_t)(count - lo) * 100u) + (span / 2u);
             return (uint16_t)(((uint32_t)i * 100u) + (frac / span));
         }
