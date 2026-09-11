@@ -88,16 +88,30 @@ Both standby pins are written LOW explicitly during CAN init, not left to the ge
 constructs. The project already relies on C11 features (`_Generic` in `can_driver.h`,
 `_Static_assert` in section 6.1), so `gnu11` as CubeIDE emits it is the target standard.
 
+**Comment discipline.** Keep a comment as short as it can be while still earning its place
+(AGENTS.md rule 10), and say *why* rather than *what* - the code already says what.
+
+A trailing comment is a few words. Two or three lines above the code is fine, and sometimes
+right, when the point is genuinely non-obvious: a hardware quirk ("NART is only writable between
+`HAL_CAN_Init()` and `HAL_CAN_Start()`"), an invariant worth proving (`count` capped at 255 so
+the `uint16_t` sum cannot overflow), or a trap like the even-numbered packs numbering downward.
+Those save the next reader real time.
+
+What is not wanted is paragraphs, narrative, or restating the function name as prose. Rule of
+thumb: if the comment is longer than the code it describes, it probably belongs in this document
+instead - which is why the spec records rejected alternatives, so the source does not have to.
+
 Bare-metal cooperative superloop. **No RTOS**: no tasks, no queues, no scheduler, no blocking
 calls. Cadence comes from `HAL_GetTick()` comparisons and the CAN transmit scheduler.
 
 ```
 App/Inc/    app.h  app_adc.h  app_can.h  app_contactor.h
-            app_fault.h  app_jk.h  app_therm.h  app_timing.h  jk_protocol.h
+            app_jk.h  app_therm.h  app_timing.h  jk_protocol.h  bms_errors.h
 App/Src/    app.c  app_adc.c  app_can.c  app_contactor.c
-            app_fault.c  app_jk.c  app_therm.c  jk_protocol.c
-EKO_Drivers/CAN/  Inc/{can_driver,CAN_DB,CAN2_DB}.h  Src/{can_driver,CAN_DB,CAN2_DB}.c
-EKO_Drivers/LED/  Inc/led_driver.h  Src/led_driver.c
+            app_jk.c  app_therm.c  jk_protocol.c
+EKO_Drivers/CAN/              Inc/{can_driver,CAN_DB,CAN2_DB}.h  Src/{can_driver,CAN_DB,CAN2_DB}.c
+EKO_Drivers/LED/              Inc/led_driver.h    Src/led_driver.c      (imported)
+EKO_Drivers/Error_Corrutines/ Inc/error_handler.h Src/error_handler.c   (imported)
 ```
 
 `main.c` gains one line, `app_main();` in `USER CODE BEGIN 2`.
@@ -121,8 +135,12 @@ small interface, testable *through* that interface rather than past it:
 2. **Accept time; do not read the clock.** `app.c` calls `HAL_GetTick()` once per pass and passes
    `nowMs` to the two time-dependent modules. Tests drive time with no stubbing, and every module
    sees a consistent "now" within one iteration.
-3. **Modules raise their own faults.** `app_fault` has zero dependencies on other modules;
-   thresholds live next to the values they judge.
+3. **Modules raise their own faults** through `EH_reportEx()`, so thresholds live next to the
+   values they judge rather than in a central evaluator.
+4. **Constants are private, with one deliberate exception.** Behavioural numbers - window
+   lengths, the 300 ms safe-state window, the 2 s pull-in, poll rates, timeouts, temperature
+   limits - are `#define`s at the top of the owning module's `.c`, invisible to callers. But
+   anything **measured from hardware** goes in `App/Inc/bms_calib.h`: see section 5.3.
 
 Shared timing helper, so the pattern is not repeated seven times:
 
@@ -134,31 +152,45 @@ bool Timing_Due(uint32_t *last, uint32_t periodMs);
 ### 3.2 Main loop
 
 ```c
+static struct LED       ledGreen = { LED_BLINK, GREEN_LD_GPIO_Port, GREEN_LD_Pin };
+static struct LED       ledRed   = { LED_OFF,   RED_LD_GPIO_Port,   RED_LD_Pin   };
+static EH_HandleTypeDef eh;
+
 void app_main(void)
 {
-    FAULT_Init();  LED_Init();      /* first, so everything later can report */
-    ADC_Init();                     /* calibrate, start circular DMA */
-    CAN_App_Init();                 /* standby LOW, filters, both buses, 21 TX frames */
-    CONTACTOR_Init();               /* duty 0 %, state OPEN */
-    JK_Init();  THERM_Init();
+    CAN_App_Init();
+    EH_init(&eh, &hcan1, BMSMASTER_NODE_FRAME_ID, &canScheduler);
+    ADC_Init(adcBuf);
+    CONTACTOR_Init();
+    JK_Init();
+    THERM_Init();
+    LED_ChangeState(&ledGreen, LED_BLINK);
 
     for (;;) {
-        uint32_t now = HAL_GetTick();       /* one consistent view of time per pass */
+        uint32_t now = HAL_GetTick();
 
-        ADC_Task();                         /* ISR-flag driven, no time dependency */
+        ADC_Task();
         if (Timing_Due(&thermTick, 1000u)) {
-            THERM_Task();                   /* app.c owns the 1 Hz cadence */
+            THERM_Task();
         }
         JK_Task(now);
         CONTACTOR_Task(now);
 
-        LED_Set(&ledRed, FAULT_Any() ? LED_ON : LED_OFF);
-        LED_Handle(&ledRed);  LED_Handle(&ledGreen);
+        LED_STATE_e want = (eh.activeErrorCount > 0u) ? LED_ON : LED_OFF;
+        if (ledRed.state != want) {
+            LED_ChangeState(&ledRed, want);
+        }
+        LED_Handle(&ledGreen);
+        LED_Handle(&ledRed);
 
-        CAN_App_Task();                     /* scheduler last: getData sees this pass's data */
+        CAN_App_Task();     /* last: getData sees this pass's data */
     }
 }
 ```
+
+`CAN_App_Init()` comes **first** because `EH_init` needs the scheduler and `hcan1` to register
+the node frame. Faults are therefore reportable from the second line onward, which is why ADC
+and the rest follow it.
 
 ### 3.3 Boundary rules
 
@@ -251,7 +283,32 @@ The `28.3626` divider ratio and the `2108` / `4` current calibration are **senso
 must be recalibrated on hardware** (`docs/adc.md`). Vref and divider tolerance dominate the
 error budget by 20-100x over any arithmetic effect.
 
-### 5.3 Temperature
+### 5.3 Calibration constants live in a header
+
+Everything that has to be **measured on hardware** lives in `App/Inc/bms_calib.h`, with the NTC
+table in `App/Src/bms_calib.c`:
+
+```c
+/* Measured on hardware. Bring-up step 3. */
+#define CALIB_PACK_V_NUM      228554u   /* decivolts per ADC count, x1e6 */
+#define CALIB_PACK_V_DEN      1000000u
+#define CALIB_CURRENT_OFFSET  2108      /* ADC count at 0 A */
+#define CALIB_CURRENT_NUM     5         /* deciamps = (count - offset) * NUM / DEN */
+#define CALIB_CURRENT_DEN     2
+
+extern const uint16_t calibNtcCount[101];   /* expected ADC count per degC, 0..100 */
+```
+
+This is a deliberate exception to rule 4 above. These are not behavioural choices but a
+*characterisation of this board*, and the people who change them - someone at bring-up with a
+multimeter, or after a board revision - need to find them without reading implementation. One
+file pair is the whole surface they have to touch.
+
+The values shipped are the reference ones from `docs/adc.md` and Bartek's table, and are
+**uncalibrated**; the header says so. The table is `extern` rather than defined in the header so
+only one translation unit carries the 202 bytes.
+
+### 5.4 Temperature
 
 The NTC is on the **high side**, with a fixed 10 k to ground: `Rt = 10000 x (Vcc/V - 1)`
 inverts to `V = Vcc x 10000/(10000 + Rt)`. `docs/adc.md`'s prose ("the NTC on the low side")
@@ -280,7 +337,7 @@ Two consequences of indexing by count rather than resistance:
 an open NTC, count > 4000 a short. Both raise `TEMP_SENSOR_FAULT`. Readings between 200 and 1092
 are reported as genuinely below 0 degC.
 
-### 5.4 Range handling
+### 5.5 Range handling
 
 Values outside the DBC range (63-87 V, +/-300 A, 0-100 degC) are detected with the generated
 `<Signal>_is_in_range()` helpers, **clamped** to the range before packing, and raise
@@ -541,22 +598,40 @@ time. Total offered load is ~21 frames/s, about **0.3 %** of a 500 kbit/s bus.
 
 ### 9.3 Driver corrections
 
-`EKO_Drivers/CAN/can_driver.c` is kept — it is a newer fork than the one in `stm_dashboard`,
-which has a tick-wrap bug, drifting cadence and a `return` that aborts the whole scheduler on a
-failed enqueue. These defects remain and are fixed here:
+`EKO_Drivers/CAN/can_driver.c` is kept and brought back in line with the canonical driver in
+`Eko-Energia/stm_drivers`. The full diff against canonical is 84 lines and **entirely inside
+`CAN_Init`**: `CAN_AddScheduledMsg`, `CAN_HandleScheduled`, `CAN_AddIncomingMsg` and
+`CAN_GetLatestMessage` are byte-identical. So the wrap-safe tick, drift-free cadence,
+`continue`-not-`return` on a failed enqueue and the `CAN_TX_FAIL_LIMIT` recovery are **canonical
+features, not local improvements** - the stale copy is the one in `stm_dashboard`.
+
+Our local copy is canonical minus the `CAN_Init` body. These are the changes:
 
 | Defect | Fix |
 | --- | --- |
 | `CAN_Init()` hardcodes `FilterBank = 0` and an accept-all mask | Parameterised filter setup. A CAN2 bank **must** be `>= SlaveStartFilterBank`; bank 0 belongs to CAN1, so `CAN_Init(&hcan2)` currently programs a CAN1 bank. |
 | `count` and `receiveFlag` are non-`volatile`, and `count++` in the ISR races `count--` in the main loop | `volatile`, with single-producer/single-consumer discipline: `head` owned by the ISR, `tail` by the main loop, no shared counter. |
-| `CAN_AddScheduledMsg()` does not null-check `msg` or `buffer` | Add the checks. |
-| `readme.md` documents `CAN_AUTO_RETRANSMISSION` / NART handling inside `CAN_Init()` that is absent from the code | **Delete the claim and the macro.** CubeMX's `AutoRetransmission = DISABLE` stands, which the readme itself argues is correct for periodic status frames - a failed frame is dropped immediately and can never block a mailbox. Every frame this board sends is periodic. |
-| `CAN_GetLatestMessage()` is documented as returning the lowest CAN ID but is FIFO by `tail` | Correct the documentation. |
+| `CAN_AddScheduledMsg()` does not null-check `msg` or `buffer` | Add the checks. Present in canonical too. |
+| The NART / `CAN_AUTO_RETRANSMISSION` block that `readme.md` documents is missing from our copy | **Restore it from canonical.** The readme is not wrong - our copy was stripped. Canonical writes NART between `HAL_CAN_ConfigFilter()` and `HAL_CAN_Start()`, the only window where the bit is writable, and mirrors it into `Init.AutoRetransmission` so a later `HAL_CAN_Init()` cannot silently revert it. Keep `CAN_AUTO_RETRANSMISSION = 0`, giving retransmission **off** - correct for periodic frames, since a failed frame is dropped at once and can never block a mailbox. |
+| Canonical `CAN_Init` returns `void` and calls `Error_Handler()` on failure | **Keep our `HAL_StatusTypeDef` return.** A driver must not trap: our `Error_Handler` opens the contactor and keeps the NODE frame alive, which is application policy the caller owns. Keep our `hcanPtr` NULL check and `CAN_FilterTypeDef filterConfig = {0}` too - canonical has neither. |
+| `CAN_GetLatestMessage()` is documented as returning the lowest CAN ID but is FIFO by `tail` | Correct the documentation. Present in canonical too. |
+
+The filter-bank and `volatile` defects are **upstream bugs in `stm_drivers`**, not local damage.
+The filter one only bites a dual-CAN board, which is likely why it has gone unnoticed. Both
+warrant a pull request against `stm_drivers` so the next board does not inherit them.
 
 ## 10. Faults and annunciation
 
-Severity encoding: **0 = safe state, 1 = error, 2 = warning, 3 = info**. Normal operation is
-`Error_Code = 0`, `Severity = 3`.
+Fault handling uses the team's **`Error_Corrutines`** driver (`EH_*`), vendored into
+`EKO_Drivers/Error_Corrutines/`. The old `stm_bms-master` used it, and it already implements
+what an application-side registry would otherwise reinvent: the 5-byte `Error_Specific_Data`
+blob (`ERROR_SPECIFIC_DATA_SIZE`), the `severity:3` / `halted:1` / `reserved:4` bitfield that is
+exactly the `BMSMaster_NODE` layout, a 16-entry active-error set, and registration of the frame
+with the CAN scheduler. `errorFrameId = nodeId` directly, so
+`EH_init(&eh, &hcan1, 128, &canScheduler)` produces ID 128 with no patching.
+
+Severity comes from the driver's `errorSeverity_e`: **0 = safe state, 1 = error, 2 = warning,
+3 = info**. Normal operation is `Error_Code = 0`, `Severity = 3`.
 
 | Code | Name | Severity | `Error_Specific_Data` |
 | ---: | --- | --- | --- |
@@ -570,24 +645,65 @@ Severity encoding: **0 = safe state, 1 = error, 2 = warning, 3 = info**. Normal 
 | 8 | `TEMP_SENSOR_FAULT` | error | raw count `u16` |
 | 9 | `CAN1_TX_FAIL` | warning | frame ID `u16` |
 
-Codes 1 and 2 come from the team's CSV registry. Codes 3-9 are allocated here and must be
-added to it. **No fault emits severity 0**, which would command vehicle-wide safe state; the
-CSV grades codes 1 and 2 as `ERROR`, and the old implementation's use of
-`ERROR_SEVERITY_SAFE_STATE` for `BMS_TEMP_HIGH` is not followed.
+Codes 1 and 2 come from the team's CSV registry; 3-9 are allocated here and must be added to
+it. The codes live in one header of constants, `App/Inc/bms_errors.h` - not a module. Each
+module reports its own faults via `EH_reportEx(&eh, code, severity, data, len)` and clears them
+with `EH_clear()`, so thresholds sit next to the values they judge.
 
-State is a 16-bit active-fault mask plus a 5-byte blob per code. Because `BMSMaster_NODE`
-carries a single `Error_Code`, the frame reports the **lowest-numbered active fault**, making
-the CSV ordering the priority order. `Node_Execution_Halted` is set when measurement is invalid
-or the contactor state machine cannot be trusted.
+**No fault emits severity 0.** The CSV grades codes 1 and 2 as `ERROR`, and the old
+implementation's use of `ERROR_SEVERITY_SAFE_STATE` for `BMS_TEMP_HIGH` is not followed. That
+also means `EH_triggerSafeState()` is never called.
+
+### 10.1 Driver constants
+
+One override, and one constant deliberately left alone.
+
+| Constant | Driver default | Here | Why |
+| --- | ---: | ---: | --- |
+| `HEARTBEAT_INTERVAL` | 1000 ms | **5000 ms** | The DBC sets `BMSMaster_NODE` to 5000 ms. 1000 ms is a generic driver default matching **no** node in the database: of the 21 `*_NODE` frames, only four set a cycle time at all - `SafeState_NODE` 5000, `BMSMaster_NODE` 5000, `Dashboard_NODE` 5000, `RCD_STATIC_NODE` 2000 - and the rest inherit the database's unset 100 ms default. The old firmware never overrode it, so it transmitted ID 128 five times faster than its own database. |
+| `ERROR_INTERVAL` | 300 ms | **300 ms, unchanged** | Left alone deliberately. `GenMsgCycleTime` specifies the frame's *nominal* rate, which is the healthy heartbeat; the database says nothing about how fast the frame may go when faulted, so there is no conflict to resolve. Two separate constants exist precisely so the frame speeds up under fault - that is what an error frame is for - and the multiplexing depends on it. |
+
+The driver **multiplexes** through active errors via `currentTransmitIndex`, which supersedes
+the earlier lowest-numbered-active-fault rule: adopting the shared driver means adopting its
+behaviour rather than forking a third one. Keeping `ERROR_INTERVAL` at 300 ms is what makes that
+workable - three simultaneous faults all reach the bus within about a second, where a 5000 ms
+faulted rate would take fifteen, and sixteen active errors would take eighty. Cost is one 8-byte
+frame at 300 ms, roughly 0.05 % of a 500 kbit/s bus, and only while a fault is active.
+
+`SAFE_STATE_FRAME_ID (0x000)` in `error_handler.h` is **dead** - referenced nowhere in
+`error_handler.c`, and `EH_triggerSafeState()` reports a severity-0 error on the node's own
+frame rather than transmitting a dedicated one. Safe state is the *severity field*, not a frame
+ID. Delete the constant on import so nobody trusts it: the real safe-state frame is **ID 1**,
+per the DBC (`BO_ 1 SafeState_Activ`, `CM_ BO_ 1 "Frame from all PCBs."`, and no frame at ID 0
+at all), the old code's `SAFE_STATE frame (StdId = 1)`, and our own `can_id_list.h` where
+`SAFE_STATE_ID 0` is commented out and `ERROR_MSG_ID 1` is live.
 
 `Error_Handler()` opens the contactor (duty 0 %), turns `RED_LD` on, then keeps CAN1
-transmitting `BMSMaster_NODE` with the fault and `Node_Execution_Halted = 1`, so the vehicle
-learns *why* the board stopped rather than only that it vanished. If CAN1 itself failed to
-initialise it falls back to LED-and-trap. There is no watchdog and no software reset, by
-decision.
+transmitting `BMSMaster_NODE` with the fault and `halted = 1`, so the vehicle learns *why* the
+board stopped rather than only that it vanished. If CAN1 itself failed to initialise it falls
+back to LED-and-trap. There is no watchdog and no software reset, by decision.
 
-LEDs: `GREEN_LD` blinks at 1 Hz to prove the loop is alive; `RED_LD` is solid whenever the
-fault mask is non-zero.
+### 10.2 LEDs
+
+`GREEN_LD` blinks at 1 Hz to prove the loop is alive; `RED_LD` is solid whenever
+`eh.activeErrorCount > 0`. State is changed only on transition, never every pass.
+
+The canonical driver synchronises blink phase through a shared counter, so
+**`LED_IncSyncTick()` must be hooked into `HAL_IncTick()`** or `syncTick` never advances and the
+LEDs never blink. `HAL_IncTick` is `__weak`, so `app.c` overrides it:
+
+```c
+void HAL_IncTick(void)          /* overrides the __weak HAL implementation */
+{
+    uwTick += uwTickFreq;
+    LED_IncSyncTick();
+}
+```
+
+`LED_SetSyncTick()` exists so a board can adopt the network-wide tick from
+`SafeState_SyncTick` (ID 30) and blink in phase with the rest of the car. That frame is declined
+(section 1), so this board's LEDs blink independently - cosmetic, and the only consequence of
+that exclusion.
 
 ## 11. Stated assumptions and open items
 
@@ -596,14 +712,31 @@ fault mask is non-zero.
 | `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
 | Error codes 3-9 | Allocated here; must be added to the team CSV registry. |
 | CAN-DATABASE PR #46 | Open. Bump the submodule and regenerate once merged. |
-| ADC calibration constants | `28.3626` divider and `2108` / `4` current values ship as named defines marked uncalibrated, and are corrected at bring-up step 3. |
+| ADC calibration constants | `28.3626` divider and `2108` / `4` current values ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
 
 ## 12. Verification
 
-**Host unit tests** for the logic where a bug yields plausible-looking output rather than an
-obvious failure. A `tests/` directory with a plain Makefile and an assert-based runner, no
-framework dependency:
+There is no board on hand, so verification is designed to establish as much as possible
+off-target. `tests/` is **never compiled into the firmware**: it is absent from `.cproject`'s
+`sourceEntries`, so it contributes zero bytes to the image, and there is **no `#ifdef` for tests
+anywhere in `App/`**. The host build compiles the same unmodified `App/Src/*.c` against
+`tests/fake/` in place of the real HAL, so application code is identical in both builds. This is
+permanent test infrastructure, not scaffolding to be removed.
+
+### 12.1 Target build, no board required
+
+`stm32_build` drives the CubeIDE headless builder with nothing attached, and gives:
+
+- `-Wall -Wextra -Werror` with no warnings, and a `cppcheck` pass.
+- `arm-none-eabi-size` against the 64 KB flash / 64 KB RAM budget of section 3.6.
+- The `_Static_assert`s on the thermistor ID map (section 6.1) fire **at compile time**, so a
+  database renumber breaks the build here rather than on a bench.
+
+### 12.2 Host unit tests
+
+For the logic where a bug yields plausible-looking output rather than an obvious failure. A
+plain Makefile and an assert-based runner, no framework dependency:
 
 Tests exercise the modules **through their real interfaces**, not through internals exposed for
 testing. Nothing is added to a public interface for a test's benefit.
@@ -614,16 +747,66 @@ testing. Nothing is added to a public interface for a test's benefit.
 | `app_therm`, via `THERM_OnFrame()` + `THERM_Task()` | the non-monotonic ID map including an **even** pack, trimmed mean, warm-up below `fill = 3`, silent-pack detection at three misses |
 | `jk_protocol`, directly - it is already pure | accumulated checksum, `LENGTH` semantics, TLV walk, length-prefixed `0x79`, both `0x84` encodings, sign negation, flag curation |
 
-**On target**, via `stm32-mcp`: `stm32_build_and_flash`, then `stm32_read_memory` on ELF symbols
+### 12.3 Fake HAL: running the application off-target
+
+Because modules accept their DMA buffer and their tick rather than creating them (section 3.1),
+`app_main()`'s loop runs natively once ~15 HAL functions are faked. The fakes **record** rather
+than simulate:
+
+| Faked | Test sees |
+| --- | --- |
+| `HAL_GetTick` | a variable the test advances, so time is driven not waited on |
+| `HAL_CAN_AddTxMessage` | every transmitted frame appended to a list, with its tick |
+| `HAL_CAN_GetRxMessage` | frames the test queues, per bus |
+| `HAL_GPIO_WritePin` / `ReadPin` | recorded pin state; readable inputs the test sets |
+| `__HAL_TIM_SET_COMPARE` / `__HAL_TIM_GET_AUTORELOAD` | contactor duty as a number |
+| `HAL_UARTEx_ReceiveToIdle_DMA`, `HAL_UART_Transmit_DMA` | a canned JK response, and the request that was sent |
+| `HAL_ADCEx_Calibration_Start`, `HAL_ADC_Start_DMA`, `HAL_CAN_ConfigFilter`, `HAL_CAN_Start`, `HAL_CAN_ActivateNotification`, `HAL_TIM_PWM_Start` | success, recorded for ordering assertions |
+
+The fake set only needs to supply `stm32f1xx_hal.h`. With `tests/fake/` first on the host
+include path, the **real** `Core/Inc/main.h` is used unchanged - it picks up the fake header and
+then defines the real pin macros, so pin definitions are never duplicated and cannot drift.
+
+Behaviour this makes assertable with no hardware:
+
+- Inject `SafeState_Activ`, assert duty drops to 0 %; advance 300 ms, assert 100 % for 2 s then
+  50 % - the whole state machine of section 8, including the pull-in kick on every re-close.
+- Feed CAN2 frames over 10 s of driven time and assert all nine output frames carry correctly
+  transposed, trimmed values, **including an even-numbered pack**.
+- Feed a canned JK response and assert the contents of frames 140-148, including the negated
+  current sign of section 7.4.
+- Advance several minutes and assert the transmit cadence really is 500 / 1000 / 5000 ms.
+- Assert init ordering: both standby pins driven LOW *before* `HAL_CAN_Start`.
+
+### 12.4 Frame packing checked against the database
+
+Encode a frame with the generated C, then decode it in Python with the cantools fork already
+present in `.claude/tmp/.venv`, and assert it round-trips. This checks scaling, byte order and
+bit positions against **the database itself** rather than against this document's reading of it.
+
+**Not used: QEMU and Renode.** Neither has an STM32F105 machine - QEMU models F100 and F405 -
+and the connectivity line's dual bxCAN, PLL2/PLL3 and ADC-plus-DMA interaction are unmodelled.
+That would mean simulating precisely the peripherals whose behaviour is in question, against a
+model of unknown fidelity. The fake HAL exercises the same application logic with no pretence
+about the hardware.
+
+### 12.5 On target
+
+Via `stm32-mcp`: `stm32_build_and_flash`, then `stm32_read_memory` on ELF symbols
 (`thermFiltered`, `thermMiss`, `faultMask`, ADC outputs) and `live_memory_start` to watch them
 move. There is no debug UART - USART1 is the JK link - so SWD is the only channel.
+
+**Requires the board, and cannot be established off-target:** CAN bit timing on a terminated
+bus; RS485 turnaround and the `DE`/`/RE` levels in practice; the ADC calibration constants of
+section 5.3; the NTC curve against the real thermistor; whether the contactor holds at 50 %;
+and whether HSE actually starts.
 
 **Bring-up order**, sequenced to isolate the unknowns:
 
 1. Green LED blinking - proves the loop runs and HSE started. A dark LED localises a clock
    failure immediately, since a failed HSE traps in `Error_Handler`.
 2. CAN1 TX on an analyser at 500 kbit/s - confirms bit timing and the standby pins together.
-3. ADC values over SWD against a multimeter on PC0/PC1/PC2 - calibrates section 5.2.
+3. ADC values over SWD against a multimeter on PC0/PC1/PC2 - calibrates section 5.3.
 4. PB0 on a scope - 1 kHz, 100 % for 2 s, then 50 %.
 5. CAN2 injection, watching `thermFiltered` - verify an **even-numbered** pack specifically.
 6. JK link last, since it carries the remaining unverified assumption.
@@ -643,4 +826,6 @@ Per AGENTS.md rule 7:
 | `docs/bmsJk.md` | The JK link is **USART1** on PA9/PA10, not USART2 on PA2/PA3. |
 | `docs/canDatabase.md` | Generated sources live in `EKO_Drivers/CAN/Inc` + `Src` and are committed; document the move step and PR #46. |
 | `docs/pcb.md` | Record `PD1-OSC_OUT` as reserved but not wired, HSE as an external oscillator in BYPASS, the ADC sampling time, and the standby pin polarity. |
+| `docs/canDatabase.md` | Note that `HEARTBEAT_INTERVAL` in `Error_Corrutines` must be overridden to the database's 5000 ms, and that `ERROR_INTERVAL` is deliberately left at 300 ms because `GenMsgCycleTime` describes the nominal rate only. |
+| `EKO_Drivers/CAN/readme.md` | The NART section is correct; our stripped `CAN_Init` was the deviation. |
 | `docs/index.md` | Add this specification. |
