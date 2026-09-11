@@ -1,0 +1,11 @@
+# Normalise line endings in the repository rather than relying on each
+# developer's core.autocrlf. STM32CubeIDE writes CRLF on regeneration, which
+# otherwise shows every generated file as modified with no content change.
+* text=auto
+
+# Binary assets: never touch these.
+*.png   binary
+*.pdf   binary
+*.elf   binary
+*.bin   binary
+*.hex   binary
