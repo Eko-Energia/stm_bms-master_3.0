@@ -371,8 +371,12 @@ Two consequences of indexing by count rather than resistance:
 | Expected count | 1092 | 2048 | 3143 | 3728 |
 
 **Sensor fault detection**, which the original cannot do because it clamps: count < 200 implies
-an open NTC, count > 4000 a short. Both raise `TEMP_SENSOR_FAULT`. Readings between 200 and 1092
-are reported as genuinely below 0 degC.
+an open NTC, count > 4000 a short. Both raise `TEMP_SENSOR_FAULT`.
+
+Readings between 200 and 1092 are genuinely below 0 degC but **cannot be reported**: the DBC
+signal is `32|16@1+`, unsigned over `[0|100]`, so the frame has no room for a negative value.
+They clamp to 0.00 degC. Distinguishing sub-zero from exactly-zero would need a signed signal
+upstream; the fault bands above still catch an open or shorted sensor.
 
 ### 5.5 Range handling
 
@@ -669,11 +673,19 @@ time. Total offered load is ~21 frames/s, about **0.3 %** of a 500 kbit/s bus.
 ### 9.3 Driver corrections
 
 `EKO_Drivers/CAN/can_driver.c` is kept and brought back in line with the canonical driver in
-`Eko-Energia/stm_drivers`. The full diff against canonical is 84 lines and **entirely inside
-`CAN_Init`**: `CAN_AddScheduledMsg`, `CAN_HandleScheduled`, `CAN_AddIncomingMsg` and
-`CAN_GetLatestMessage` are byte-identical. So the wrap-safe tick, drift-free cadence,
-`continue`-not-`return` on a failed enqueue and the `CAN_TX_FAIL_LIMIT` recovery are **canonical
-features, not local improvements** - the stale copy is the one in `stm_dashboard`.
+`Eko-Energia/stm_drivers`. The diff against canonical is confined to **two** functions,
+`CAN_Init` and `CAN_HandleScheduled`: `CAN_AddScheduledMsg`, `CAN_AddIncomingMsg` and
+`CAN_GetLatestMessage` are byte-identical. So the wrap-safe tick, drift-free cadence and the `CAN_TX_FAIL_LIMIT` recovery
+are **canonical features, not local improvements** - the stale copy is the one in
+`stm_dashboard`.
+
+`CAN_HandleScheduled` is the one exception, and deliberately so. Canonical re-armed `lastTick`
+on a failed enqueue, which costs the frame a whole period. With three mailboxes and ~18 frames
+sharing a 1000 ms cycle that starved everything past the third: five frame ids never
+transmitted at all and the NODE frame managed 3 of 12 over a simulated minute. The frame now
+stays due and retries on the next pass, and the fail counter counts missed **periods** rather
+than passes so ordinary sub-millisecond contention cannot trip the abort. **This fix belongs
+upstream in `stm_drivers`** - every board using the canonical driver has the same defect.
 
 Our local copy is canonical minus the `CAN_Init` body. These are the changes:
 
@@ -701,7 +713,9 @@ with the CAN scheduler. `errorFrameId = nodeId` directly, so
 `EH_init(&eh, &hcan1, 128, &canScheduler)` produces ID 128 with no patching.
 
 Severity comes from the driver's `errorSeverity_e`: **0 = safe state, 1 = error, 2 = warning,
-3 = info**. Normal operation is `Error_Code = 0`, `Severity = 3`.
+3 = info**. Normal operation is the driver's heartbeat: `Error_Code = HEARTBEAT_ERROR_CODE`
+(`0xFFFF`), `Severity = 3`. The driver reserves `0xFFFF` for it, so no real fault may use that
+value.
 
 | Code | Name | Severity | `Error_Specific_Data` |
 | ---: | --- | --- | --- |
@@ -783,8 +797,11 @@ those sites by construction rather than by luck - `PWM_Out_Init` (inside `CONTAC
 only caller of `HAL_TIM_PWM_Start` on TIM3, so until it runs the output is never enabled and
 `CCR3` stays 0 - and `CONTACTOR_ForceOpen()` writes nothing while its timer handle is `NULL`.
 `RED_LD`'s port and pin are compile-time constants, so `App_OnFatalError` binds them itself if
-`initAll` has not: the LED lights at every site from `MX_GPIO_Init` onward, and only the three
-`SystemClock_Config` sites - which precede GPIO setup entirely - cannot annunciate. There is no watchdog and no software reset, by decision.
+`initAll` has not. It also opens GPIOB's clock gate and configures the pin itself, because the
+three `SystemClock_Config` sites precede `MX_GPIO_Init` and a write to a gated peripheral is
+silently discarded on the F1 rather than faulting. RCC is always clocked, so the fault path can
+open the gate: the LED lights at **all** 18 sites. There is no watchdog and no software reset,
+by decision.
 
 ### 10.2 LEDs
 

@@ -29,7 +29,7 @@ Automatic retransmission is disabled by default: every frame this board sends is
 periodic, so a failed frame is superseded by the next period rather than needing a
 retry.
 
-It has one failure mode worth knowing about if enabled. bxCAN has **three** TX mailboxes. A frame that is never acknowledged - single node on the bus, missing 120 Ω termination, bit timing mismatch - is retried by hardware forever and never releases its mailbox. After three such frames every `HAL_CAN_AddTxMessage()` fails. `CAN_HandleScheduled()` handles this in two ways: a failed enqueue costs one skipped period instead of a retry on every main loop iteration, and after `CAN_TX_FAIL_LIMIT` consecutive failures the pending requests are aborted so the queue can drain.
+It has one failure mode worth knowing about if enabled. bxCAN has **three** TX mailboxes. A frame that is never acknowledged - single node on the bus, missing 120 Ω termination, bit timing mismatch - is retried by hardware forever and never releases its mailbox. After three such frames every `HAL_CAN_AddTxMessage()` fails. `CAN_HandleScheduled()` handles this in two ways: a failed enqueue leaves the frame due so it retries on the next pass rather than losing its slot, and after `CAN_TX_FAIL_LIMIT` missed **periods** the pending requests are aborted so the queue can drain.
 
 For a pure periodic status frame, where the next period supersedes stale data anyway, `CAN_AUTO_RETRANSMISSION = 0` is the safer choice - a failed frame is dropped immediately and can never block a mailbox. This is why it is the default here.
 
@@ -119,7 +119,7 @@ CAN_HandleScheduled(&hcan, &buffer);
 Timing notes:
 - The due check is `(now - lastTick) >= periodMs`, which stays correct across the 32 bit `HAL_GetTick()` wrap (~49.7 days).
 - On success `lastTick` advances by whole periods, so the cadence does not drift with the execution time of the send. If a message falls more than one period behind it resynchronises to the current tick instead of emitting a catch-up burst.
-- On a failed enqueue the message is re-armed for the next period and the remaining messages in the list are still processed. `txFailCount` in `CAN_scheduledMsg` is managed by the driver, do not write it.
+- On a failed enqueue `lastTick` is left alone, so the frame stays due and retries on the next pass; the remaining messages in the list are still processed. Re-arming it instead would silence the frame for a whole period - with three mailboxes and a burst of frames sharing one period, only the first three would ever transmit. `txFailCount` in `CAN_scheduledMsg` is managed by the driver, do not write it.
 
 ### Removing a frame
 ```C
