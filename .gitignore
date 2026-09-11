@@ -28,7 +28,13 @@ tests/*.bin
 *.d
 *.su
 *.cyclo
-.settings/
+# Ignore the IDE's machine-specific settings, but share the file encoding:
+# without it Eclipse falls back to each platform's default - UTF-8 here,
+# Cp1252 on Windows - so the same bytes decode differently per developer.
+# Must be .settings/* rather than .settings/, because git cannot re-include a
+# file whose parent directory is excluded.
+.settings/*
+!.settings/org.eclipse.core.resources.prefs
 *.xml
 *.mk
 *.scratch
