@@ -134,3 +134,13 @@ Thumbs.db
 
 # Oracle intermediate: written by test_pack_vectors, consumed by check_packing.py
 tests/oracle/vectors.txt
+
+# Stress-harness build output. The harnesses themselves are committed: they
+# found the CAN mailbox starvation, the node-frame starvation and the JK value
+# gaps, none of which the unit suite could reach.
+tests/stress/build/
+tests/stress/*.o
+tests/stress/*.out
+tests/stress/*.bin
+tests/stress/*.log
+tests/stress/**/*.dSYM/
