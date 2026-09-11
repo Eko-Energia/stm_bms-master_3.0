@@ -870,6 +870,7 @@ that exclusion.
 | `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
 | Error codes 3-10 | Allocated here; must be added to the team CSV registry. |
 | CAN-DATABASE PR #46 | **Merged.** Submodule pinned to `master` (`60ab52e`); regenerated with no content diff. |
+| Two driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. Both now verified by the soak. |
 | ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
 
