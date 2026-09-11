@@ -3,6 +3,7 @@
 #include "bms_errors.h"
 #include "error_handler.h"
 #include "CAN_DB.h"
+#include "CAN2_DB.h"
 
 static CAN_InstanceTypeDef inst;
 static CAN_HandleTypeDef hcan = { &inst, { DISABLE } };
@@ -18,6 +19,32 @@ static void setup(void)
     EH_init(&eh, &hcan, BMSMASTER_NODE_FRAME_ID, &sched);
     THERM_Init(&eh);
 }
+
+/* The DBC's own frame names, indexed [module - 1][thermistor - 1]. This is the
+   only independent oracle for the odd-up / even-down numbering. */
+static const uint32_t dbThermIds[THERM_MODULES][THERM_PER_MODULE] = {
+    { PCBCELLS1_THERM1_FRAME_ID, PCBCELLS1_THERM2_FRAME_ID, PCBCELLS1_THERM3_FRAME_ID,
+      PCBCELLS1_THERM4_FRAME_ID, PCBCELLS1_THERM5_FRAME_ID, PCBCELLS1_THERM6_FRAME_ID,
+      PCBCELLS1_THERM7_FRAME_ID, PCBCELLS1_THERM8_FRAME_ID, PCBCELLS1_THERM9_FRAME_ID },
+    { PCBCELLS2_THERM1_FRAME_ID, PCBCELLS2_THERM2_FRAME_ID, PCBCELLS2_THERM3_FRAME_ID,
+      PCBCELLS2_THERM4_FRAME_ID, PCBCELLS2_THERM5_FRAME_ID, PCBCELLS2_THERM6_FRAME_ID,
+      PCBCELLS2_THERM7_FRAME_ID, PCBCELLS2_THERM8_FRAME_ID, PCBCELLS2_THERM9_FRAME_ID },
+    { PCBCELLS3_THERM1_FRAME_ID, PCBCELLS3_THERM2_FRAME_ID, PCBCELLS3_THERM3_FRAME_ID,
+      PCBCELLS3_THERM4_FRAME_ID, PCBCELLS3_THERM5_FRAME_ID, PCBCELLS3_THERM6_FRAME_ID,
+      PCBCELLS3_THERM7_FRAME_ID, PCBCELLS3_THERM8_FRAME_ID, PCBCELLS3_THERM9_FRAME_ID },
+    { PCBCELLS4_THERM1_FRAME_ID, PCBCELLS4_THERM2_FRAME_ID, PCBCELLS4_THERM3_FRAME_ID,
+      PCBCELLS4_THERM4_FRAME_ID, PCBCELLS4_THERM5_FRAME_ID, PCBCELLS4_THERM6_FRAME_ID,
+      PCBCELLS4_THERM7_FRAME_ID, PCBCELLS4_THERM8_FRAME_ID, PCBCELLS4_THERM9_FRAME_ID },
+    { PCBCELLS5_THERM1_FRAME_ID, PCBCELLS5_THERM2_FRAME_ID, PCBCELLS5_THERM3_FRAME_ID,
+      PCBCELLS5_THERM4_FRAME_ID, PCBCELLS5_THERM5_FRAME_ID, PCBCELLS5_THERM6_FRAME_ID,
+      PCBCELLS5_THERM7_FRAME_ID, PCBCELLS5_THERM8_FRAME_ID, PCBCELLS5_THERM9_FRAME_ID },
+    { PCBCELLS6_THERM1_FRAME_ID, PCBCELLS6_THERM2_FRAME_ID, PCBCELLS6_THERM3_FRAME_ID,
+      PCBCELLS6_THERM4_FRAME_ID, PCBCELLS6_THERM5_FRAME_ID, PCBCELLS6_THERM6_FRAME_ID,
+      PCBCELLS6_THERM7_FRAME_ID, PCBCELLS6_THERM8_FRAME_ID, PCBCELLS6_THERM9_FRAME_ID },
+    { PCBCELLS7_THERM1_FRAME_ID, PCBCELLS7_THERM2_FRAME_ID, PCBCELLS7_THERM3_FRAME_ID,
+      PCBCELLS7_THERM4_FRAME_ID, PCBCELLS7_THERM5_FRAME_ID, PCBCELLS7_THERM6_FRAME_ID,
+      PCBCELLS7_THERM7_FRAME_ID, PCBCELLS7_THERM8_FRAME_ID, PCBCELLS7_THERM9_FRAME_ID }
+};
 
 /* Deliver one value to every thermistor of every module, then advance a period. */
 static void feedAll(uint8_t raw, int periods)
@@ -59,6 +86,25 @@ TEST(the_last_pack_maps_at_both_ends)
     THERM_Task();
     CHECK_EQ(THERM_Filtered(7u, 1u), 60u);
     CHECK_EQ(THERM_Filtered(7u, 9u), 61u);
+}
+
+TEST(all_63_database_ids_map_to_their_own_module_and_thermistor)
+{
+    setup();
+    /* The _Static_asserts sample four ids; THERM_OnFrame must agree with the
+       database on all 63, or a renumber cross-maps thermistors silently. */
+    for (uint8_t m = 0u; m < THERM_MODULES; m++) {
+        for (uint8_t t = 0u; t < THERM_PER_MODULE; t++) {
+            THERM_OnFrame(dbThermIds[m][t], (uint8_t)(10u + (m * THERM_PER_MODULE) + t));
+        }
+    }
+    THERM_Task();
+    for (uint8_t m = 0u; m < THERM_MODULES; m++) {
+        for (uint8_t t = 0u; t < THERM_PER_MODULE; t++) {
+            CHECK_EQ(THERM_Filtered((uint8_t)(m + 1u), (uint8_t)(t + 1u)),
+                     (uint8_t)(10u + (m * THERM_PER_MODULE) + t));
+        }
+    }
 }
 
 TEST(node_frames_and_out_of_range_ids_are_ignored)
@@ -196,6 +242,7 @@ int main(void)
     RUN(odd_packs_number_upward);
     RUN(even_packs_number_downward);
     RUN(the_last_pack_maps_at_both_ends);
+    RUN(all_63_database_ids_map_to_their_own_module_and_thermistor);
     RUN(node_frames_and_out_of_range_ids_are_ignored);
     RUN(a_single_spike_is_rejected_by_the_trimmed_mean);
     RUN(a_real_step_settles_within_ten_periods);

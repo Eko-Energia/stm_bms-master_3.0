@@ -81,7 +81,7 @@ void THERM_OnFrame(uint32_t stdId, uint8_t raw)
     if (offset == 0u) { return; }               /* PCBCells<x>_NODE */
 
     const uint8_t module = MODULE_OF(stdId);
-    const uint8_t therm = (module & 1u) ? offset : (uint8_t)(10u - offset);
+    const uint8_t therm = THERM_OF(stdId);      /* the macro the asserts guard */
 
     thermLatest[module - 1u][therm - 1u] = raw;
     thermSeen[module - 1u][therm - 1u] = 1u;
