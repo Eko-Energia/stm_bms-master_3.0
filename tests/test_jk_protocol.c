@@ -174,6 +174,31 @@ TEST(cell_voltages_reject_a_count_above_the_series_taps)
     CHECK(!JKP_Decode(buf, makeResponse(buf, payload, sizeof payload), &d));
 }
 
+TEST(a_reported_cell_count_above_the_series_taps_rejects_the_frame)
+{
+    uint8_t buf[64];
+    JK_Data_t d;
+
+    /* 0x8a is the JK's own runtime count and is published straight to frame
+       148. 21 is the pack, so 21 decodes and 24 is a fault (spec 7.5) - three
+       cells the vehicle would look for and never find. */
+    uint8_t payload[3] = { 0x8Au, 0x00u, 21u };
+    CHECK(JKP_Decode(buf, makeResponse(buf, payload, sizeof payload), &d));
+    CHECK_EQ(d.cellCount, 21u);
+
+    payload[2] = 24u;
+    CHECK(!JKP_Decode(buf, makeResponse(buf, payload, sizeof payload), &d));
+
+    /* A count that only overflows the uint8_t truncation must not slip past. */
+    payload[1] = 0x01u; payload[2] = 0x15u;              /* 277 -> 21 if truncated */
+    CHECK(!JKP_Decode(buf, makeResponse(buf, payload, sizeof payload), &d));
+
+    /* Below 21 stays legal: the absent cells publish 0 mV. */
+    payload[1] = 0x00u; payload[2] = 16u;
+    CHECK(JKP_Decode(buf, makeResponse(buf, payload, sizeof payload), &d));
+    CHECK_EQ(d.cellCount, 16u);
+}
+
 TEST(temperatures_use_the_offset_above_one_hundred_encoding)
 {
     uint8_t buf[64];
@@ -310,6 +335,7 @@ int main(void)
     RUN(cell_voltages_accept_a_single_cell);
     RUN(cell_voltages_accept_the_full_21_cell_pack);
     RUN(cell_voltages_reject_a_count_above_the_series_taps);
+    RUN(a_reported_cell_count_above_the_series_taps_rejects_the_frame);
     RUN(temperatures_use_the_offset_above_one_hundred_encoding);
     RUN(soh_is_derived_from_actual_over_configured_capacity);
     RUN(soh_stays_at_default_when_capacity_setting_is_zero);

@@ -168,7 +168,15 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
         case 0x84u: currentRaw = be16(v); haveCurrent = true; break;
         case 0x85u: out->soc = v[0]; break;
         case 0x87u: out->cycles = be16(v); break;
-        case 0x8Au: out->cellCount = (uint8_t)be16(v); break;
+        case 0x8Au: {
+            /* Same rule as the 0x79 block above (spec 7.5): a reported count
+               over 21 means cells the vehicle cannot see, so reject the frame
+               rather than truncate it onto the bus. */
+            const uint16_t count = be16(v);
+            if (count > JKP_CELLS_MAX) { return false; }
+            out->cellCount = (uint8_t)count;
+            break;
+        }
         case 0x8Bu: out->statusFlags = curateWarnings(be16(v)); break;
         case 0x8Cu: out->modeFlags = (uint8_t)(be16(v) & 0xFFu); break;
         case 0xAAu: capacitySet = be32(v); haveSet = true; break;
