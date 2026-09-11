@@ -9,3 +9,27 @@
 *.elf   binary
 *.bin   binary
 *.hex   binary
+
+# Collapse-by-default in GitHub diffs (still expandable, and excluded from the
+# repo's language stats). Reviewer attention is the scarce resource here.
+#
+# Vendored: ST's HAL, never edited.
+Drivers/**                      linguist-vendored=true
+
+# CubeMX output. These change only when the .ioc changes - NVIC priorities,
+# PWM mode, DMA handles - so the .ioc is the thing to review, not the diff.
+Core/**                         linguist-generated=true
+# ...except main.c, which carries our USER CODE: the app_main() call, the
+# app.h include and the Error_Handler hook. Must stay expanded.
+Core/Src/main.c                 -linguist-generated
+
+# cantools output from docs/CAN-DATABASE. AGENTS.md rule 8 forbids editing it;
+# regenerate instead. The packing oracle verifies it against Python cantools.
+EKO_Drivers/CAN/Inc/CAN_DB.h    linguist-generated=true
+EKO_Drivers/CAN/Inc/CAN2_DB.h   linguist-generated=true
+EKO_Drivers/CAN/Src/CAN_DB.c    linguist-generated=true
+EKO_Drivers/CAN/Src/CAN2_DB.c   linguist-generated=true
+
+# Tests. Hand-written, so this is a collapse for review focus, not a claim that
+# they are generated - expand them when the change is in test behaviour.
+tests/**                        linguist-generated=true
