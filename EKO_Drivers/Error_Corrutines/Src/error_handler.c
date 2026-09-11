@@ -126,6 +126,9 @@ void EH_reportEx(EH_HandleTypeDef *hehandler, uint16_t errorCode, errorSeverity_
 		}
 	}
 
+	// Latched before the insert path below reassigns existingIndex
+	uint8_t isNewError = (existingIndex < 0);
+
 	uint8_t dataL = (dataLen > ERROR_SPECIFIC_DATA_SIZE) ? ERROR_SPECIFIC_DATA_SIZE : dataLen;
 
 	if (existingIndex >= 0) {
@@ -173,8 +176,9 @@ void EH_reportEx(EH_HandleTypeDef *hehandler, uint16_t errorCode, errorSeverity_
 		}
 	}
 
-	// First error reported: Setup error scheduler message
-	if (hehandler->activeErrorCount == 1 && existingIndex == 0) {
+	// First error inserted: Setup error scheduler message.
+	// Repeat reports must not re-install it, that would reset lastTick and starve the frame.
+	if (isNewError && hehandler->activeErrorCount == 1 && existingIndex == 0) {
 		CAN_RemoveScheduledMsg(hehandler->errorFrameId, hehandler->scheduler);
 
 		struct CAN_scheduledMsg errorMsg;

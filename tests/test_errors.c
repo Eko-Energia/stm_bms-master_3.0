@@ -70,6 +70,50 @@ TEST(a_reported_fault_reaches_the_node_frame)
     CHECK_EQ(code, BMS_ERR_PACK_VOLT_RANGE);
 }
 
+/* ADC_Task re-reports the same fault on every scan while the condition holds.
+   A repeat report used to re-install the scheduled message, resetting lastTick,
+   so BMSMaster_NODE never aged up to its period and stopped transmitting. */
+TEST(a_repeatedly_reported_single_fault_keeps_the_node_frame_on_cadence)
+{
+    setup();
+    EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, NULL, 0u);
+    CHECK_EQ(eh.activeErrorCount, 1u);
+
+    uint32_t sent = 0u, lastSendTick = 0u, worstGapMs = 0u;
+    for (uint32_t t = 1u; t <= 6000u; t++) {
+        Fake_SetTick(t);
+        /* Re-report at 1 ms, far faster than the frame period. */
+        EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, NULL, 0u);
+        CAN_HandleScheduled(&hcan, &sched);
+
+        uint32_t now = Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID);
+        if (now != sent) {
+            uint32_t gapMs = t - lastSendTick;
+            if (gapMs > worstGapMs) worstGapMs = gapMs;
+            lastSendTick = t;
+            sent = now;
+        }
+    }
+
+    CHECK(sent >= 6000u / ERROR_INTERVAL);
+    CHECK(worstGapMs <= (uint32_t)ERROR_INTERVAL + 1u);
+}
+
+/* The re-install fires once per insertion, so a second fault must not restart it either. */
+TEST(a_second_fault_does_not_restart_the_node_frame)
+{
+    setup();
+    EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, NULL, 0u);
+    Fake_SetTick(299u);
+    CAN_HandleScheduled(&hcan, &sched);
+    CHECK_EQ(Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID), 0u);
+
+    EH_reportEx(&eh, BMS_ERR_PACK_CURRENT_HIGH, ERROR_SEVERITY_ERROR, NULL, 0u);
+    Fake_SetTick(300u);
+    CAN_HandleScheduled(&hcan, &sched);
+    CHECK_EQ(Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID), 1u);
+}
+
 TEST(clearing_the_last_fault_returns_to_healthy)
 {
     setup();
@@ -85,6 +129,8 @@ int main(void)
     RUN(heartbeat_uses_the_database_cycle_time_not_the_driver_default);
     RUN(node_frame_is_registered_on_the_scheduler);
     RUN(a_reported_fault_reaches_the_node_frame);
+    RUN(a_repeatedly_reported_single_fault_keeps_the_node_frame_on_cadence);
+    RUN(a_second_fault_does_not_restart_the_node_frame);
     RUN(clearing_the_last_fault_returns_to_healthy);
     return TEST_SUMMARY();
 }
