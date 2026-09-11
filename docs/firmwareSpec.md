@@ -27,7 +27,7 @@ CAN1 transmit schedule, fault reporting, LED annunciation.
 | HVIL (`PA7`) | Purpose unconfirmed. Configured as an input, otherwise unused and unreported. |
 | Independent watchdog | Deliberately deferred to avoid complexity; revisit later. |
 | `SafeState_SyncTick` (ID 30) | Not needed. The frame broadcasts a 32-bit ms counter every 10 s so other ECUs can align timestamps, but nothing asks BMS Master to timestamp anything. The CAN1 filter admits only IDs 1 and 3, so it is dropped. |
-| `PCBCells<x>_NODE` frames (210, 220 ... 270) | Not consumed. They carry each pack's own `Error_Code` and `Severity`, but a silent pack is already detected from thermistor absence (section 6.3), which is what this board needs. Consequence: a pack reporting its own fault while still sending thermistor data goes unnoticed here. |
+| `PCBCells<x>_NODE` frames (210, 220 ... 270) | Not consumed. They carry each module's own `Error_Code` and `Severity`, but a silent module is already detected from thermistor absence (section 6.3), which is what this board needs. Consequence: a module reporting its own fault while still sending thermistor data goes unnoticed here. |
 | CAN bus-off recovery | `AutoBusOff` stays `DISABLE` with no software recovery; deferred. |
 
 ## 2. Hardware baseline
@@ -137,11 +137,11 @@ small interface, testable *through* that interface rather than past it:
 
 1. **Accept the buffers hardware fills; do not create them.** `ADC_Init(volatile uint16_t *dmaBuf)`
    takes its DMA buffer from `app.c`. This is what makes the module testable through its real
-   interface - a host test supplies its own array, writes raw counts, calls `ADC_Task()` and reads
-   the getters. The alternative, exposing `ntc_count_to_centi()` publicly, would widen the
+   interface - a host test supplies its own array, writes raw counts, calls `ADC_Task(nowMs)` and
+   reads the getters. The alternative, exposing `ntc_count_to_centi()` publicly, would widen the
    interface for no caller's benefit.
 2. **Accept time; do not read the clock.** `app.c` calls `HAL_GetTick()` once per pass and passes
-   `nowMs` to the two time-dependent modules. Tests drive time with no stubbing, and every module
+   `nowMs` to the three time-dependent modules. Tests drive time with no stubbing, and every module
    sees a consistent "now" within one iteration. This holds in interrupt context too: the
    contactor's RX handler sets a flag and `CONTACTOR_Task(now)` timestamps it, rather than
    reaching for the clock where no tick can be passed in.
@@ -179,13 +179,14 @@ void app_main(void)
     for (;;) {
         uint32_t now = HAL_GetTick();
 
-        ADC_Task();
+        ADC_Task(now);
         if (Timing_Due(now, &thermTick, 1000u)) {
             THERM_Task();
         }
         JK_Task(now);
         CONTACTOR_Task(now);
-        THERMAL_Evaluate(ADC_Ready(), ADC_TempCenti(), THERM_MaxRaw());
+        THERMAL_Evaluate(ADC_Ready(), ADC_TempCenti(),
+                         THERM_MaxRaw(), THERM_MaxModule(), THERM_MaxTherm());
 
         LED_STATE_e want = (eh.activeErrorCount > 0u) ? LED_ON : LED_OFF;
         if (ledRed.state != want) {
@@ -240,15 +241,32 @@ Everything else is single-writer flags and 32-bit aligned timestamps.
 
 ### 3.6 Resource budget
 
+Measured on the Debug target build (`arm-none-eabi-size`, `arm-none-eabi-nm --size-sort -S`
+against `Debug/BMS-Master.elf`), not estimated. The previous table under-counted by omitting
+the error handler, the CubeMX peripheral handles, and the linker's heap/stack reservation -
+every line it did budget came in at or under its estimate.
+
 | Item | RAM |
 | --- | ---: |
 | Thermistors (`latest`, `seen`, `window`, `filtered`, `miss`) | 882 B |
-| JK (512 B RX buffer, 21 B request, decoded struct) | ~615 B |
-| CAN scheduler, `CAN_MAX_MSG = 28` | ~1240 B |
-| ADC (buffer + 3x10 window) | 66 B |
-| **Total** | **< 3 KB of 64 KB** |
+| JK (512 B RX buffer, 21 B request, decoded struct, link state) | 617 B |
+| CAN scheduler, `CAN_MAX_MSG = 28` (20 app frames + NODE/heartbeat) | 1240 B |
+| ADC (3x10 window, DMA buffer, packed state) | 83 B |
+| Error handler (`EH_HandleTypeDef eh`) | 180 B |
+| CubeMX peripheral handles (`huart1` 72, `htim3` 72, 3x DMA 68 each, `hcan1`/`hcan2`/`hadc1`) | 476 B |
+| Misc application statics (LED, contactor, CAN/node glue) - remainder, not a direct `nm` figure | 186 B |
+| Heap + stack reservation (`_Min_Heap_Size` + `_Min_Stack_Size`) | 1536 B |
+| **Total (`.data` + `.bss`)** | **5200 B (5.08 KiB) of 64 KB** |
+
+Flash: 39068 B (38.15 KiB) of 64 KB (`.text` 39044 B + `.data` 24 B).
 
 NTC lookup table: 202 B of flash as `const uint16_t[101]`.
+
+Release build (`arm-none-eabi-size Release/BMS-Master.elf`, `-Wall -Wextra -Werror`, same
+sources): `.text` 21744 B + `.data` 24 B = **21768 B flash** (21.26 KiB) of 64 KB; `.data` 24 B +
+`.bss` 5152 B = **5176 B RAM** (5.05 KiB) of 64 KB. The RAM difference from Debug (5200 B) is
+noise-level (24 B) - the same statics, just without debug-build padding/inlining differences in
+`.bss` layout.
 
 ## 4. Numeric conventions
 
@@ -281,7 +299,14 @@ a circular DMA buffer. `HAL_ADCEx_Calibration_Start()` runs before the first con
 
 Per channel, a 10-deep rolling window with a **trimmed mean**: sum all ten, subtract the single
 minimum and single maximum, divide by eight. This rejects a lone outlier completely rather than
-diluting it. `ADC_Ready()` returns false until the window has filled once.
+diluting it. `ADC_Ready()` returns false until the window has filled once, **and again once the
+conversion stream stalls**: the DMA is a bus master, so if it stops nothing else notices and the
+last values would be published and judged forever. `ADC_Task` records the tick of each completed
+scan; 100 ms without one (about 1200 missed conversions) raises `ADC_STALLED` and drops
+`ADC_Ready()`, so `THERMAL_Evaluate` stops judging frozen data. The next completed scan clears
+both. This is a **separate code from `TEMP_SENSOR_FAULT`** on purpose: an open or shorted NTC
+sends a technician to the sensor and its wiring, a dead conversion stream sends them to the MCU,
+and the two have nothing in common from that end.
 
 ### 5.2 Conversions
 
@@ -290,9 +315,10 @@ decivolts = (count * 228554u) / 1000000u;          /* max intermediate 936M, fit
 deciamps  = ((int32_t)count - 2108) * 5 / 2;       /* 0.25 A per count */
 ```
 
-The `28.3626` divider ratio and the `2108` / `4` current calibration are **sensor-specific and
-must be recalibrated on hardware** (`docs/adc.md`). Vref and divider tolerance dominate the
-error budget by 20-100x over any arithmetic effect.
+The `28.3626` divider ratio (`CALIB_PACK_V_NUM`/`CALIB_PACK_V_DEN` = 228554/1000000) and the
+`2108` offset / `5÷2` current gain are **sensor-specific and must be recalibrated on hardware**
+(`docs/adc.md`). Vref and divider tolerance dominate the error budget by 20-100x over any
+arithmetic effect.
 
 ### 5.3 Calibration constants live in a header
 
@@ -390,7 +416,7 @@ mean (drop min and max, divide by `fill - 2`). Trimming applies once `fill >= 3`
 plain mean over `fill`, so output is sensible from the first second.
 
 The ring is advanced by the **1 Hz emit tick, not by arrival**, using one shared index, so a
-pack that drops a frame cannot desynchronise its own history. A silent pack re-pushes its
+module that drops a frame cannot desynchronise its own history. A silent module re-pushes its
 previous value.
 
 Worked example, one corrupt sample among ten:
@@ -406,8 +432,8 @@ protection. The filter is deliberately symmetric: no fast-attack asymmetry.
 
 ### 6.3 Silent packs
 
-`thermSeen` clears each second. Three consecutive misses raise `CAN2_PACK_SILENT` with a
-7-bit bitmap of silent packs. The value holds meanwhile: the `u8 x 0.39216` encoding spans
+`thermSeen` clears each second. Three consecutive misses raise `CAN2_MODULE_SILENT` with a
+7-bit bitmap of silent modules. The value holds meanwhile: the `u8 x 0.39216` encoding spans
 `[0..100]` with `255 = exactly 100.0 degC`, so **no code is free to mean "no data"** and
 staleness must be reported out of band.
 
@@ -473,6 +499,12 @@ is sent once at startup and again only after a timeout, then the poll retried, s
 requires activation only when the BMS is asleep. Three consecutive failures raise
 `JK_COMMS_TIMEOUT`; frame-level failures raise `JK_FRAME_INVALID`.
 
+The reply to `0x01` is **acknowledged, never published**. It is a well-formed, checksum-valid
+frame with no data TLVs, so it decodes as a valid all-zero `JK_Data_t`; accepting it as a reading
+would put 0 % SOC and 21 cells at 0 mV on the bus as healthy and clear `JK_COMMS_TIMEOUT`, at
+every boot and every reconnect. The transport remembers which command is in flight and treats an
+activation reply as "the BMS is awake" only; the read-all that follows is what publishes.
+
 `0xC0` (protocol version) arrives free in every read-all response and **must be parsed before
 current**, because it selects the `0x84` encoding and the two are indistinguishable at low
 currents.
@@ -524,9 +556,25 @@ protections that matter most. A category summary preserves all of them:
 
 ### 7.5 Cell count
 
-The pack is **21S**, confirmed arithmetically: 63 V / 21 = 3.0 V and 87 V / 21 = 4.14 V per
-cell, a standard Li-ion range, whereas 12 cells would require an impossible 5.25-7.25 V. The
-database originally carried only 12 cell slots. `Eko-Energia/CAN-DATABASE` PR **#46** adds the
+**Battery topology, confirmed 2026-09-11:** seven modules of **3S5P**, giving **21S** overall.
+Each packet holds 15 physical cells (3 series x 5 parallel); the battery holds 105. Parallel
+cells share a node and self-balance, so the 21 series taps are the complete measurement set -
+105 cells, 21 measured values.
+
+This agrees with the arithmetic: 63 V / 21 = 3.0 V and 87 V / 21 = 4.14 V per cell, a standard
+Li-ion range, whereas 12 cells would require an impossible 5.25-7.25 V and 15 would require
+4.2-5.8 V.
+
+The seven modules are the seven `PCBCells<x>` boards on CAN2, one per module - so the thermistor
+topology (7 x 9) and the cell count (21S) describe the same seven modules from different angles,
+and neither number constrains the other.
+
+> **Terminology.** A **module** is one of the seven 3S5P groups; the **pack** is the whole
+> 21S battery. The code follows this: `THERM_MODULES = 7` and `THERM_Filtered(module, therm)`
+> address one module, while `ADC_PackDecivolts()` measures the battery. "Packet" is avoided -
+> in a CAN codebase it reads as a frame.
+
+The database originally carried only 12 cell slots. `Eko-Energia/CAN-DATABASE` PR **#46** adds the
 rest:
 
 | ID | Frame |
@@ -538,15 +586,23 @@ rest:
 | 147 | `BMSMaster_JK_Temp` (moved from 144) |
 | 148 | `BMSMaster_JK_CycleStats` (moved from 145) |
 
-Until #46 merges, generated sources come from the `BMSMaster/21-cells` branch. Once merged, the
-submodule pointer is bumped and the sources regenerated to confirm no diff. A JK-reported count
-above 21 raises a fault, since those cells would be invisible to the vehicle.
+PR #46 is **merged**. The submodule now pins `master` (`60ab52e`) and the sources were
+regenerated: the output is byte-identical apart from the generator's banner, confirming the
+merged `master` and the branch agree for this node.
+
+A JK-reported count **above** 21 raises a fault, since those cells would be invisible to the
+vehicle. A count **below** 21 is accepted, and the absent cells publish **0 mV** - confirmed as
+the intended convention on 2026-09-11. Zero is safe as a sentinel because no real cell can read
+0 V, and it is the link-down value too, so a consumer treating 0 as "no valid reading" is
+correct in both cases. Consumers that need the reason have it: `JK_CellCount` on frame 148 gives
+the real count, and `JK_COMMS_TIMEOUT` fires when the link is down.
 
 ### 7.6 Link loss
 
-After three failed polls the six JK frames are transmitted with **zeroed payloads** and
-`JK_COMMS_TIMEOUT` is raised. The cycle time is preserved so consumers watching cadence are
-unaffected.
+After three failed polls all **nine** JK-sourced frames (140, 141-146, 147, 148 - six cell
+frames after PR #46's split, not the three it had before) are transmitted with **zeroed
+payloads** and `JK_COMMS_TIMEOUT` is raised. The cycle time is preserved so consumers watching
+cadence are unaffected.
 
 ## 8. Contactor and safe state
 
@@ -651,15 +707,17 @@ Severity comes from the driver's `errorSeverity_e`: **0 = safe state, 1 = error,
 | ---: | --- | --- | --- |
 | 1 | `BMS_TEMP_HIGH` | error | temperature, centi-degC `u16` |
 | 2 | `CAN2_TEMP_HIGH` | error | pack `u8`, thermistor `u8`, raw count `u8` |
-| 3 | `CAN2_PACK_SILENT` | error | bitmap of silent packs `u8` |
+| 3 | `CAN2_MODULE_SILENT` | error | bitmap of silent modules `u8` |
 | 4 | `JK_COMMS_TIMEOUT` | error | consecutive failures `u8` |
 | 5 | `JK_FRAME_INVALID` | warning | reason code `u8` |
 | 6 | `PACK_VOLT_RANGE` | error | decivolts `u16` |
 | 7 | `PACK_CURRENT_HIGH` | error | deciamps `i16` |
 | 8 | `TEMP_SENSOR_FAULT` | error | raw count `u16` |
 | 9 | `CAN1_TX_FAIL` | warning | frame ID `u16` |
+| 10 | `BMS_ERR_FATAL_INIT` | error | none used |
+| 11 | `ADC_STALLED` | error | ms since the last completed ADC scan `u16` |
 
-Codes 1 and 2 come from the team's CSV registry; 3-9 are allocated here and must be added to
+Codes 1 and 2 come from the team's CSV registry; 3-11 are allocated here and must be added to
 it. The codes live in one header of constants, `App/Inc/bms_errors.h` - not a module. Each
 module reports its own faults via `EH_reportEx(&eh, code, severity, data, len)` and clears them
 with `EH_clear()`, so thresholds sit next to the values they judge.
@@ -667,13 +725,23 @@ with `EH_clear()`, so thresholds sit next to the values they judge.
 Two exceptions, both because the judgement spans more than one module:
 
 - **Codes 1 and 2**, the 60 degC limits, are evaluated by `app_thermal`:
-  `THERMAL_Evaluate(boardValid, boardCenti, packMaxRaw)`. It compares the on-board NTC against
+  `THERMAL_Evaluate(boardValid, boardCenti, packMaxRaw, packModule, packTherm)`. The two index
+  arguments come from `app_therm`'s `THERM_MaxModule()`/`THERM_MaxTherm()` getters, which keep the
+  argmax of the same sweep that produced `THERM_MaxRaw()` - code 2's payload has to name the
+  thermistor, and the max alone cannot. It compares the on-board NTC against
   the hottest pack thermistor, so it belongs to neither `app_adc` nor `app_therm`. It takes
   values rather than calling getters, which is what keeps it testable without a fake HAL - and
   what keeps `app.c` free of logic. Hysteresis: 60 degC to raise, 57 degC to clear on the board
   sensor; raw 153 to raise, 145 to clear on the pack, at 0.39216 degC per count.
 - **Code 9** `CAN1_TX_FAIL` is also raised by `app_can` when `CAN_AddScheduledMsg` rejects a
   frame at init, since a frame that never registered will never transmit.
+- **Code 10** `BMS_ERR_FATAL_INIT` is raised by `App_OnFatalError()` (`app.c`), the `main.c`
+  fallback called from `Error_Handler()`. It exists because, without it, `App_OnFatalError` had
+  no code of its own and reported an unrelated CAN fault code even when the failure was an ADC
+  or other peripheral init failure - code 10 names the failure for what it is: reaching
+  `Error_Handler()` at all. If `EH_isInitialized()` is false (CAN1 itself never came up), only
+  the contactor-open/red-LED fallback runs; otherwise `EH_stop()` reports code 10 and
+  `CAN_App_Task()` keeps running so `BMSMaster_NODE` stays on the bus with `halted = 1`.
 
 **No fault emits severity 0.** The CSV grades codes 1 and 2 as `ERROR`, and the old
 implementation's use of `ERROR_SEVERITY_SAFE_STATE` for `BMS_TEMP_HIGH` is not followed. That
@@ -706,7 +774,17 @@ at all), the old code's `SAFE_STATE frame (StdId = 1)`, and our own `can_id_list
 `Error_Handler()` opens the contactor (duty 0 %), turns `RED_LD` on, then keeps CAN1
 transmitting `BMSMaster_NODE` with the fault and `halted = 1`, so the vehicle learns *why* the
 board stopped rather than only that it vanished. If CAN1 itself failed to initialise it falls
-back to LED-and-trap. There is no watchdog and no software reset, by decision.
+back to LED-and-trap.
+
+`App_OnFatalError()` must survive being called before anything is initialised: 16 of the 18
+`Error_Handler()` call sites are in `SystemClock_Config` and the `MX_*_Init` functions, ahead of
+`app_main()`. Every hardware access there is guarded on its handle. The contactor is open at
+those sites by construction rather than by luck - `PWM_Out_Init` (inside `CONTACTOR_Init`) is the
+only caller of `HAL_TIM_PWM_Start` on TIM3, so until it runs the output is never enabled and
+`CCR3` stays 0 - and `CONTACTOR_ForceOpen()` writes nothing while its timer handle is `NULL`.
+`RED_LD`'s port and pin are compile-time constants, so `App_OnFatalError` binds them itself if
+`initAll` has not: the LED lights at every site from `MX_GPIO_Init` onward, and only the three
+`SystemClock_Config` sites - which precede GPIO setup entirely - cannot annunciate. There is no watchdog and no software reset, by decision.
 
 ### 10.2 LEDs
 
@@ -735,9 +813,9 @@ that exclusion.
 | Item | Status |
 | --- | --- |
 | `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
-| Error codes 3-9 | Allocated here; must be added to the team CSV registry. |
-| CAN-DATABASE PR #46 | Open. Bump the submodule and regenerate once merged. |
-| ADC calibration constants | `28.3626` divider and `2108` / `4` current values ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
+| Error codes 3-10 | Allocated here; must be added to the team CSV registry. |
+| CAN-DATABASE PR #46 | **Merged.** Submodule pinned to `master` (`60ab52e`); regenerated with no content diff. |
+| ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
 
 ## 12. Verification
@@ -758,7 +836,12 @@ returns - the logic was moved into a module rather than the interface being wide
 
 `stm32_build` drives the CubeIDE headless builder with nothing attached, and gives:
 
-- `-Wall -Wextra -Werror` with no warnings, and a `cppcheck` pass.
+- `-Wall -Wextra -Werror` with no warnings, and a `cppcheck` pass. `.cproject` records only
+  `-Wextra` and `-Werror` as explicit options; `-Wall` is CubeIDE's plugin **default** and so is
+  never written to `.cproject`, which stores non-default settings only. This is not a missing
+  flag: the generated `Debug/App/Src/subdir.mk` (and its `Release/` counterpart) show the actual
+  `arm-none-eabi-gcc` invocation with `-Wall -Wextra -Werror` all present. Recorded here so
+  nobody "rediscovers" the same false alarm from reading `.cproject` alone.
 - `arm-none-eabi-size` against the 64 KB flash / 64 KB RAM budget of section 3.6.
 - The `_Static_assert`s on the thermistor ID map (section 6.1) fire **at compile time**, so a
   database renumber breaks the build here rather than on a bench.

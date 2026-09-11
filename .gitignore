@@ -20,7 +20,7 @@ Debug/*
 Release/*
 bin/
 obj/
-tests/
+tests/*.bin
 *.elf
 *.list
 *.map
@@ -125,3 +125,6 @@ Thumbs.db
 
 # STM32CubeIDE macOS project artefact
 /.osx.project
+
+# Oracle intermediate: written by test_pack_vectors, consumed by check_packing.py
+tests/oracle/vectors.txt

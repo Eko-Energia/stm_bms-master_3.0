@@ -10,8 +10,9 @@ This pinout is read from `BMS-Master.ioc` in `stm_bms-master_3.0`.
 | Package | LQFP64 |
 | MCU family | STM32F1 |
 | Board type | Custom |
-| System clock | 72 MHz configured by CubeMX values |
-| ADC clock | 9 MHz |
+| System clock | 72 MHz, PLL from a 16 MHz `HSE` external oscillator in **BYPASS** mode (`RCC.HSE_VALUE=16000000`) - not a crystal |
+| ADC clock | 9 MHz (PCLK2 / 8, `RCC.ADCPresc=RCC_ADCPCLK2_DIV8`) |
+| ADC sampling time | 239.5 cycles on all three ADC1 channels (`ADC_SAMPLETIME_239CYCLES_5`) |
 
 ## Assigned pins
 
@@ -44,7 +45,8 @@ This pinout is read from `BMS-Master.ioc` in `stm_bms-master_3.0`.
 | `PC9` | `AM` | GPIO input | Pull-up | Address-match/status input |
 | `PC10` | `nCAN2_Stby` | GPIO output | Pull-down | CAN2 standby control |
 | `PC11` | `nCAN1_Stby` | GPIO output | Output | CAN1 standby control |
-| `PD0-OSC_IN` | RCC oscillator input | RCC_OSC_IN | HSE oscillator input | External oscillator input |
+| `PD0-OSC_IN` | RCC oscillator input | RCC_OSC_IN | HSE-External-Clock-Source, locked | 16 MHz external oscillator input (BYPASS, not a crystal) |
+| `PD1-OSC_OUT` | RCC oscillator output | RCC_OSC_OUT | HSE-External-Clock-Source, **not locked** | Assigned but **not wired** - reserved so a future switch to a crystal is one `.ioc` change, not a board respin |
 
 ## Analog channels
 
@@ -65,7 +67,12 @@ The engineering calculations for these inputs are described in [adc.md](adc.md).
 | CAN1 | PA11 | PA12 | 500 kbit/s |
 | CAN2 | PB12 | PB13 | 500 kbit/s |
 
-The corresponding transceiver standby controls are `PC11` for CAN1 and `PC10` for CAN2. Confirm the active-low behavior against the board schematic before enabling a bus.
+The corresponding transceiver standby controls are `PC11` (`nCAN1_Stby`) for CAN1 and `PC10`
+(`nCAN2_Stby`) for CAN2. **These are active-low: LOW is normal operation.** The `n` prefix in the
+label is easy to misread as "not asserted when high" the way an nRESET or nCS line normally
+works, but for these standby pins the opposite is true - driving either pin **HIGH puts both
+transceivers into standby**, silencing all CAN traffic. `PC10` is pulled down at boot
+(`GPIO_PULLDOWN`), so the reset state is the safe, normal-operation state.
 
 ## Timer output
 
@@ -77,13 +84,18 @@ The PWM behavior is described in [pwmGeneration.md](pwmGeneration.md).
 
 ## UART and RS485 note
 
-This target `.ioc` lists `USART1` only. `PA9` and `PA10` are the configured UART pins. The labels `RS_DIR` and `RE_DIR` exist as GPIO outputs on PC4 and PC5, but no `USART2_TX` or `USART2_RX` assignment is present in this `.ioc`.
-
-Therefore, the JK/RS485 transport described in [bmsJk.md](bmsJk.md) requires additional CubeMX pin/peripheral configuration before it can operate in this copied project.
+This `.ioc` lists `USART1` only. `PA9`/`PA10` are the configured UART pins, used as the JK BMS
+RS485 link over DMA (`DMA1_Channel4` TX, `DMA1_Channel5` RX), 115200 8N1. The labels `RS_DIR` and
+`RE_DIR` are GPIO outputs on PC4 and PC5 that drive the SN65HVD72 transceiver's `DE`/`/RE` pins.
+`USART2` is not assigned in this `.ioc` at all - `PA2`/`PA3` are not available for JK
+communication. See [bmsJk.md](bmsJk.md) for the transport state machine and frame format.
 
 ## Unassigned or reserved functions
 
 - `PA13` and `PA14` are reserved for SWD debugging.
-- `PD0-OSC_IN` is reserved for the RCC oscillator input.
+- `PD0-OSC_IN` is the HSE oscillator input (BYPASS mode, external 16 MHz oscillator).
+- `PD1-OSC_OUT` is assigned to `RCC_OSC_OUT` in the `.ioc` but is **not locked and not wired** -
+  reserved so a future switch to a crystal (which needs both `OSC_IN` and `OSC_OUT`) is a `.ioc`
+  and BOM change, not a board respin.
 - `VP_SYS_VS_Systick` is the CubeMX virtual SysTick service and has no external package pin.
-- The `.ioc` does not assign `USART2`; do not assume PA2/PA3 are available for JK communication without updating the CubeMX configuration.
+- The `.ioc` does not assign `USART2`; `PA2`/`PA3` are not configured for any peripheral.
