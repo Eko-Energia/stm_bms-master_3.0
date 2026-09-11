@@ -33,6 +33,10 @@ git submodule update --init docs/CAN-DATABASE
 # 2. Fetch the cantools fork into the ignored scratch directory
 git clone https://github.com/Eko-Energia/cantools.git .claude/tmp/cantools
 
+# 2a. REQUIRED until Eko-Energia/cantools#1 merges. The fix for zero-length
+#     messages is not yet on the default branch - see Gotchas.
+git -C .claude/tmp/cantools checkout fix/empty-message-definitions-node-filter
+
 # 3. Build the generator environment
 uv venv .claude/tmp/.venv
 uv pip install --python .claude/tmp/.venv ./.claude/tmp/cantools
@@ -44,29 +48,44 @@ Verify:
 .claude/tmp/.venv/bin/cantools --version
 ```
 
-A version like `0.1.dev1948+g46ec68183` is correct — see [Gotchas](#gotchas). uv provides the
+A version like `0.1.dev1949+g29b75602e` is correct — see [Gotchas](#gotchas). uv provides the
 Python interpreter; no system Python needs preparing.
 
 ## Generating the C sources
 
-Run from the repository root. `<output-dir>` is wherever the generated pair should land.
+Run from the repository root. `<output-dir>` is a scratch directory — cantools writes both the
+CAN1 and CAN2 header/source pairs into whatever `-o` directory you give it, so generate to a
+temporary directory and split the four files by hand afterwards (see below).
 
 ```bash
+OUT=$(mktemp -d)
+
 # CAN1 — the bus BMS Master transmits on. Filter to this node.
 .claude/tmp/.venv/bin/cantools generate_c_source \
-    docs/CAN-DATABASE/CAN_DB.dbc --node BMSMaster -o <output-dir>
+    docs/CAN-DATABASE/CAN_DB.dbc --node BMSMaster -o "$OUT"
 
 # CAN2 — the pack thermistor bus. BMS Master only listens, so do NOT pass --node.
 .claude/tmp/.venv/bin/cantools generate_c_source \
-    docs/CAN-DATABASE/CAN2_DB.dbc -o <output-dir>
+    docs/CAN-DATABASE/CAN2_DB.dbc -o "$OUT"
+
+# This repo's convention splits headers from sources, so move them into place:
+mv "$OUT"/CAN_DB.h "$OUT"/CAN2_DB.h EKO_Drivers/CAN/Inc/
+mv "$OUT"/CAN_DB.c "$OUT"/CAN2_DB.c EKO_Drivers/CAN/Src/
 ```
 
 The first command writes `CAN_DB.h` / `CAN_DB.c`; the second writes `CAN2_DB.h` / `CAN2_DB.c`.
 Output file names come from the input file stem, overridable with `--database-name`.
 
-Generated sources are not committed today. `EKO_Drivers/CAN/` holds the hand-written transport
-layer ([can.md](can.md)); the generated files are the frame layer that sits on top of it. Decide
-a home for them when the application layer lands, and regenerate rather than edit them.
+Generated sources are committed. They live in `EKO_Drivers/CAN/Inc/` (`CAN_DB.h`, `CAN2_DB.h`)
+and `EKO_Drivers/CAN/Src/` (`CAN_DB.c`, `CAN2_DB.c`), alongside the hand-written transport layer
+([can.md](can.md)) — the generated files are the frame layer that sits on top of it. Never
+hand-edit them; regenerate from the database instead.
+
+The committed sources are generated from `master` of `docs/CAN-DATABASE` (commit `60ab52e`).
+[CAN-DATABASE PR #46](https://github.com/Eko-Energia/CAN-DATABASE/pull/46), which added the six
+contiguous JK cell frames for the 21S pack, is merged. Regenerating after the bump produced no
+content change - only the generator's version/timestamp banner moved - confirming the merged
+`master` and the old `BMSMaster/21-cells` branch agree for this node.
 
 Useful flags: `--bit-fields` to minimise struct sizes, `--use-float` for single-precision
 scaling, `--no-floating-point-numbers` to keep the generated code integer-only. Run
@@ -104,6 +123,12 @@ Note `PCBs` becoming `pc_bs`. Do not substitute `pip install cantools` or `uvx c
 - **`--node` on `CAN2_DB.dbc` fails silently.** `BMSMaster` is not a node in that database, so
   `--node BMSMaster` filters everything out and still exits 0 with a cheerful success message.
   The tell is size: roughly 2 KB of output instead of roughly 94 KB. Omit `--node` for CAN2.
+- **Generating from the fork's default branch produces code that will not compile.** For a
+  message a node neither sends nor receives, the generator emitted `pack`/`unpack` stubs whose
+  struct it never declared, so the struct is first named inside its own parameter list. That is
+  a hard error under the target's `-Werror`; the BMS Master build failed with 14 of them. The fix
+  is on `fix/empty-message-definitions-node-filter` (Eko-Energia/cantools#1). Drop step 2a once
+  it merges.
 - **The odd version string is expected.** The fork carries no git tags, so `setuptools_scm`
   falls back to `0.1.dev<N>+g<hash>`. It is not a broken install.
 - **Installing needs the fork's `.git` directory.** `setuptools_scm` derives the version from git
