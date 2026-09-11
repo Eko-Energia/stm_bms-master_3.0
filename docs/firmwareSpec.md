@@ -476,7 +476,9 @@ Half-duplex RS485 on USART1 via an SN65HVD72, 115200 8N1. Protocol V2.5
 The payload is a **variable-length TLV walk**, not fixed offsets: `0x79` is itself
 length-prefixed with 3 bytes per cell. Worst case ~339 bytes, so the RX buffer is **512 B**.
 The BMS also sends unsolicited frames (type `0x02`), so the parser must not assume
-request/response pairing. Unknown identifiers are skipped by a table-driven length map.
+request/response pairing. A table-driven length map drives the walk; an identifier that is
+not in the map, or whose data runs past the payload, **rejects the frame** - the walk
+cannot reach what follows it, and every field behind it would publish 0.
 
 ### 7.2 Protocol and transport are separate modules
 
@@ -527,13 +529,13 @@ currents.
 | `JK_PackVoltage` (0.01 V) | `0x83` | direct; both are 10 mV/LSB |
 | `JK_PackCurrent` (0.01 A) | `0x84` | `0xC0`=0: `10000 - raw`. `0xC0`=1: bit15 direction, bits14..0 magnitude in 10 mA. **Then negated** - see below |
 | `JK_SOC` (%) | `0x85` | direct |
-| `JK_SOH` (%) | `0xb9` / `0xaa` | **derived**: actual capacity / capacity setting x 100, clamped 0-100. The protocol has no SOH register. |
+| `JK_SOH` (%) | `0xb9` / `0xaa` | **derived**: actual capacity / capacity setting x 100, clamped to 100 up to 110 %. The protocol has no SOH register. |
 | `JK_Cell1..21_mV` | `0x79` | direct, mV; cell count = length / 3 |
 | `JK_MosTemp` | `0x80` | `v > 100 ? -(v - 100) : v` |
 | `JK_BalTemp` | `0x81` | battery-box temperature, same decode |
 | `JK_Cycles` | `0x87` | direct |
 | `JK_CellCount` | `0x8a` | direct, true runtime count |
-| `JK_ModeFlags` | `0x8c` | low byte; only bits 0-3 are defined |
+| `JK_ModeFlags` | `0x8c` | bits 0-3 only; bits 4-15 are reserved and masked off |
 | `JK_StatusFlags` | `0x8b` | **curated 8-bit summary** - see below |
 
 **Current sign convention.** The JK protocol yields positive = charging, while
@@ -564,6 +566,29 @@ protections that matter most. A category summary preserves all of them:
 | 5 | cell pressure difference | b7 |
 | 6 | low capacity | b0 |
 | 7 | 309_A / 309_B protection | b12, b13 |
+
+**Value gate.** `JKP_Decode` validates values, not only structure. Every published field is
+checked against the narrower of its JK register range and its CAN_DB signal range; outside that
+the register is corrupt, so the **frame is rejected** rather than clamped into a plausible
+reading. `false` reaches the transport as `JK_FRAME_INVALID`, a warning that keeps the previous
+data - a loud, diagnosable failure instead of a silent wrong reading.
+
+| Field | Accepted | Outside it |
+| --- | --- | --- |
+| `0x79` block | length a multiple of 3, at most 21 cells, cell number 1-21 | reject |
+| `0x80` / `0x81` | raw 0-140 (0-100 degC, 101-140 = -1..-40 degC) | reject |
+| `0x83` | 0-10000 centivolts (`JK_PackVoltage` is 0-100.00 V) | reject |
+| `0x84` | +/-30000 centiamps (`JK_PackCurrent`, and the Hall sensor, are +/-300 A) | reject |
+| `0x85` | 0-100 % | reject |
+| `0x8a` | 3-32 per the register, and at most 21 for this pack | reject |
+| `0x8c` | bits 0-3 | mask |
+| `0xaa` / `0xb9` | SOH up to 110 % of rated | reject |
+
+The disabled CRC16 slot must be zero, as the protocol declares: it sits outside the accumulated
+sum, so leaving it unchecked leaves 16 freely malleable bits. The sum itself is order-blind - a
+byte swap inside the payload keeps a frame valid - and no fix for that exists at the protocol
+level, so the value gate is the only defence: a swap is caught exactly when it pushes a field
+out of range.
 
 ### 7.5 Cell count
 

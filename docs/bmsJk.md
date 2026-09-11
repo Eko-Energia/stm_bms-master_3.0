@@ -88,7 +88,14 @@ about 339 bytes, so the RX buffer (`JKP_RX_BUF_LEN`) is 512 B.
 
 The checksum is a plain 16-bit accumulated sum (not a CRC), computed identically for building a
 request (`JKP_BuildRequest`) and validating a response (`JKP_Validate`): sum every byte up to and
-including the end flag, store the result big-endian in the last two bytes.
+including the end flag, store the result big-endian in the last two bytes. The two CRC16 bytes
+before it must be zero, as the protocol declares - they sit outside the sum, so an unchecked
+slot is 16 freely malleable bits.
+
+`JKP_Decode()` also checks **values**, not only structure: an unknown identifier, a TLV that runs
+past the payload, or a field outside its protocol/CAN_DB range rejects the whole frame, which the
+transport reports as `JK_FRAME_INVALID` and which keeps the previous reading. See
+[firmwareSpec.md](firmwareSpec.md) section 7.4 for the per-field bounds.
 
 ## Signal mapping and topology
 
