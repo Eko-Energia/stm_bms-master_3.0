@@ -46,7 +46,7 @@ static uint16_t makeJkResponse(uint8_t *buf)
     p = putField(payload, p, 0xB9u, 88u, 4u);           /* capacity actual 88 Ah -> SOH 88% */
     p = putField(payload, p, 0x8Au, 21u, 2u);           /* cell count 21 */
     p = putField(payload, p, 0x8Bu, 0x0004u, 2u);       /* monomer OV -> statusFlags bit0 */
-    p = putField(payload, p, 0x8Cu, 0x00ABu, 2u);       /* modeFlags low byte 0xAB */
+    p = putField(payload, p, 0x8Cu, 0x00ABu, 2u);       /* modeFlags 0xab -> 0x0b, b4+ reserved */
     p = putField(payload, p, 0x80u, 45u, 2u);           /* mosTemp +45 C */
     p = putField(payload, p, 0x81u, 105u, 2u);          /* balTemp -5 C (offset-above-100) */
     p = putField(payload, p, 0x87u, 1234u, 2u);         /* 1234 cycles */

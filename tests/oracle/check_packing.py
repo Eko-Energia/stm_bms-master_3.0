@@ -83,7 +83,7 @@ EXPECTED = {
         "BMSMaster_JK_SOC": 77,
         "BMSMaster_JK_SOH": 88,
         "BMSMaster_JK_StatusFlags": 1,
-        "BMSMaster_JK_ModeFlags": 0xAB,
+        "BMSMaster_JK_ModeFlags": 0x0B,  # 0x8c raw 0xab, reserved bits 4..15 dropped
     },
     0x08D: _cell_mv(1, 4),
     0x08E: _cell_mv(5, 8),
