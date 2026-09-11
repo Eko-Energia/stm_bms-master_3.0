@@ -3,6 +3,11 @@
 
 #define SAFESTATE_ACTIV_ID (1u)
 #define SAFESTATE_NODE_ID  (3u)
+#define SAFE_CLEAR_MS      (300u)
+#define PULL_IN_MS         (2000u)
+
+/* 16 of these steps advance the tick by exactly 2^32 ms. */
+#define WRAP_STEP          (0x10000000u)
 
 static TIM_InstanceTypeDef tinst;
 static TIM_HandleTypeDef htim = { &tinst };
@@ -165,6 +170,74 @@ TEST(tick_wrap_does_not_stall_the_safe_state_timeout)
     CHECK(CONTACTOR_IsClosed());
 }
 
+/* The tick the 112-day soak reported the spurious open at. */
+#define SOAK_TICK (0xFFFF1324u)
+
+TEST(the_elapsed_safe_state_window_does_not_reopen_at_the_tick_wrap)
+{
+    setup();
+    CONTACTOR_OnSafeStateFrame(SAFESTATE_NODE_ID);
+    CONTACTOR_OnSafeStateFrame(SAFESTATE_ACTIV_ID);
+    CONTACTOR_Task(SOAK_TICK);
+    CHECK(!CONTACTOR_IsClosed());
+    CONTACTOR_Task(SOAK_TICK + SAFE_CLEAR_MS);
+    CHECK(CONTACTOR_IsClosed());
+
+    /* 49.71 days with no further Activ frame: nothing refreshes lastActivMs,
+       and the tick returns to the value it was stamped with. */
+    bool everOpened = false;
+    for (uint32_t i = 0u; i < 16u; i++) {
+        CONTACTOR_Task(SOAK_TICK + SAFE_CLEAR_MS + ((i + 1u) * WRAP_STEP));
+        if (!CONTACTOR_IsClosed()) { everOpened = true; }
+    }
+    for (uint32_t d = 0u; d <= SAFE_CLEAR_MS; d++) {
+        CONTACTOR_Task(SOAK_TICK + d);
+        if (!CONTACTOR_IsClosed()) { everOpened = true; }
+    }
+    CHECK(!everOpened);
+}
+
+TEST(the_pull_in_kick_does_not_repeat_at_the_tick_wrap)
+{
+    setup();
+    CONTACTOR_OnSafeStateFrame(SAFESTATE_NODE_ID);
+    CONTACTOR_Task(SOAK_TICK);
+    CHECK_EQ(Fake_LastCompare(), 999u);
+    CONTACTOR_Task(SOAK_TICK + PULL_IN_MS);
+    CHECK_EQ(Fake_LastCompare(), 500u);
+
+    /* Closed throughout: closedAtMs is frozen, so the wrap must not re-kick. */
+    bool everKicked = false;
+    for (uint32_t i = 0u; i < 16u; i++) {
+        CONTACTOR_Task(SOAK_TICK + PULL_IN_MS + ((i + 1u) * WRAP_STEP));
+        if (Fake_LastCompare() != 500u) { everKicked = true; }
+    }
+    for (uint32_t d = 0u; d <= PULL_IN_MS; d++) {
+        CONTACTOR_Task(SOAK_TICK + d);
+        if (Fake_LastCompare() != 500u) { everKicked = true; }
+    }
+    CHECK(!everKicked);
+    CHECK(CONTACTOR_IsClosed());
+}
+
+TEST(a_fresh_activ_frame_still_opens_after_the_wrap)
+{
+    setup();
+    CONTACTOR_OnSafeStateFrame(SAFESTATE_NODE_ID);
+    CONTACTOR_Task(SOAK_TICK);
+    for (uint32_t i = 0u; i < 16u; i++) {
+        CONTACTOR_Task(SOAK_TICK + ((i + 1u) * WRAP_STEP));
+    }
+    CHECK(CONTACTOR_IsClosed());
+
+    CONTACTOR_OnSafeStateFrame(SAFESTATE_ACTIV_ID);
+    CONTACTOR_Task(SOAK_TICK + 1u);
+    CHECK(!CONTACTOR_IsClosed());
+    CONTACTOR_Task(SOAK_TICK + 1u + SAFE_CLEAR_MS);
+    CHECK(CONTACTOR_IsClosed());
+    CHECK_EQ(Fake_LastCompare(), 999u);          /* a real close kicks again */
+}
+
 int main(void)
 {
     RUN(power_on_and_pre_init_force_open_are_safe);
@@ -179,5 +252,8 @@ int main(void)
     RUN(unrelated_frame_ids_are_ignored);
     RUN(safe_state_timeout_boundary_is_pinned_both_sides);
     RUN(tick_wrap_does_not_stall_the_safe_state_timeout);
+    RUN(the_elapsed_safe_state_window_does_not_reopen_at_the_tick_wrap);
+    RUN(the_pull_in_kick_does_not_repeat_at_the_tick_wrap);
+    RUN(a_fresh_activ_frame_still_opens_after_the_wrap);
     return TEST_SUMMARY();
 }
