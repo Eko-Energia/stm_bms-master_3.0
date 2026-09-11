@@ -354,7 +354,7 @@ uint8_t EH_GetAllActiveWarnings(EH_HandleTypeDef *hehandler, EH_ActiveError *out
  */
 static void getData_HeightbeatOK(uint8_t *data, void *context)
 {
-	// UNUSED(context); // Not needed for simple heartbeat, but good practice
+	UNUSED(context); // Not needed for simple heartbeat, but good practice
 	
 	// Construct Heartbeat OK payload (Error Code 0xFFFF, Severity INFO)
 	uint16_t errorCode = HEARTBEAT_ERROR_CODE;

@@ -1,0 +1,90 @@
+#include "test_runner.h"
+#include "bms_errors.h"
+#include "error_handler.h"
+#include "CAN_DB.h"
+
+static CAN_InstanceTypeDef inst;
+static CAN_HandleTypeDef hcan = { &inst, { DISABLE } };
+static struct CAN_scheduledMsgList sched;
+static EH_HandleTypeDef eh;
+
+static void setup(void)
+{
+    Fake_Reset();
+    inst.MCR = 0;
+    memset(&sched, 0, sizeof sched);
+    memset(&eh, 0, sizeof eh);
+    EH_init(&eh, &hcan, BMSMASTER_NODE_FRAME_ID, &sched);
+}
+
+/* Drive the scheduler far enough that every registered frame is due at least once. */
+static void pump(uint32_t untilMs)
+{
+    for (uint32_t t = 0; t <= untilMs; t += 100u) {
+        Fake_SetTick(t);
+        CAN_HandleScheduled(&hcan, &sched);
+    }
+}
+
+TEST(error_codes_match_the_csv_registry)
+{
+    CHECK_EQ(BMS_ERR_TEMP_HIGH, 1);
+    CHECK_EQ(BMS_ERR_CAN2_TEMP_HIGH, 2);
+    CHECK_EQ(BMS_ERR_CAN2_MODULE_SILENT, 3);
+    CHECK_EQ(BMS_ERR_JK_COMMS_TIMEOUT, 4);
+    CHECK_EQ(BMS_ERR_JK_FRAME_INVALID, 5);
+    CHECK_EQ(BMS_ERR_PACK_VOLT_RANGE, 6);
+    CHECK_EQ(BMS_ERR_PACK_CURRENT_HIGH, 7);
+    CHECK_EQ(BMS_ERR_TEMP_SENSOR_FAULT, 8);
+    CHECK_EQ(BMS_ERR_CAN1_TX_FAIL, 9);
+    CHECK_EQ(BMS_ERR_FATAL_INIT, 10);
+    CHECK_EQ(BMS_ERR_ADC_STALLED, 11);
+}
+
+TEST(heartbeat_uses_the_database_cycle_time_not_the_driver_default)
+{
+    CHECK_EQ(HEARTBEAT_INTERVAL, 5000);
+}
+
+TEST(node_frame_is_registered_on_the_scheduler)
+{
+    setup();
+    CHECK(sched.size > 0u);
+    pump(6000u);
+    CHECK(Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID) > 0u);
+}
+
+TEST(a_reported_fault_reaches_the_node_frame)
+{
+    setup();
+    const uint8_t blob[5] = { 0x12u, 0x34u, 0u, 0u, 0u };
+    EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, blob, 2u);
+    CHECK_EQ(eh.activeErrorCount, 1u);
+
+    pump(6000u);
+    uint8_t data[8];
+    CHECK(Fake_FindTx(BMSMASTER_NODE_FRAME_ID, data, NULL));
+
+    /* Error_Code is a 16-bit little-endian field at byte 0 of BMSMaster_NODE. */
+    uint16_t code = (uint16_t)(data[0] | ((uint16_t)data[1] << 8));
+    CHECK_EQ(code, BMS_ERR_PACK_VOLT_RANGE);
+}
+
+TEST(clearing_the_last_fault_returns_to_healthy)
+{
+    setup();
+    EH_reportEx(&eh, BMS_ERR_JK_COMMS_TIMEOUT, ERROR_SEVERITY_ERROR, NULL, 0u);
+    CHECK_EQ(eh.activeErrorCount, 1u);
+    EH_clear(&eh, BMS_ERR_JK_COMMS_TIMEOUT);
+    CHECK_EQ(eh.activeErrorCount, 0u);
+}
+
+int main(void)
+{
+    RUN(error_codes_match_the_csv_registry);
+    RUN(heartbeat_uses_the_database_cycle_time_not_the_driver_default);
+    RUN(node_frame_is_registered_on_the_scheduler);
+    RUN(a_reported_fault_reaches_the_node_frame);
+    RUN(clearing_the_last_fault_returns_to_healthy);
+    return TEST_SUMMARY();
+}

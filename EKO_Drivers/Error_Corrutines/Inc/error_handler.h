@@ -27,17 +27,15 @@ extern "C"
 /** @brief Error frame DLC (8 bytes payload) */
 #define ERROR_FRAME_DLC (8)
 
-/** @brief Safe State frame ID (highest priority) */
-#define SAFE_STATE_FRAME_ID (0x000)
-
 /** @brief Maximum diagnostic data bytes */
 #define ERROR_SPECIFIC_DATA_SIZE (5)
 
 /** @brief Heartbeat OK error code */
 #define HEARTBEAT_ERROR_CODE (0xFFFF)
 
-/** @brief Interval of heartbeat message */
-#define HEARTBEAT_INTERVAL (1000)
+/* 5000 ms per CAN_DB.dbc's BMSMaster_NODE; the 1000 ms driver default
+ * matches no node in the database. */
+#define HEARTBEAT_INTERVAL (5000)
 
 /** @brief Interval of error message */
 #define ERROR_INTERVAL (300)
