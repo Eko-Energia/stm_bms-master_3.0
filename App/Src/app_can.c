@@ -27,6 +27,7 @@ _Static_assert(CAN2_FILTER_BANK_BASE == CAN_SLAVE_START_FILTER_BANK,
 static struct CAN_scheduledMsgList scheduler;
 static CAN_HandleTypeDef *can1;
 static EH_HandleTypeDef  *ehandler;
+static uint32_t txFailId;        /* frame currently reported as blocked, 0 = none */
 
 /* Persistent frame structs: getData packs from these, so nothing is stale. */
 static struct BMSMaster_MasterVoltCurrTemp_t frameMeas;
@@ -127,6 +128,7 @@ void CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleT
 {
     can1 = hcan1;
     ehandler = eh;
+    txFailId = 0u;
     memset(&scheduler, 0, sizeof scheduler);
 
     /* LOW is normal operation. Written explicitly rather than relying on the
@@ -176,9 +178,40 @@ void CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleT
     add(BMSMASTER_END_FRAME_ID, BMSMASTER_END_LENGTH, BMSMASTER_END_CYCLE_TIME_MS, NULL, NULL);
 }
 
+/*
+ * txFailCount is the driver's own count of missed PERIODS, reset on every
+ * successful enqueue, so reaching CAN_TX_FAIL_LIMIT means "this frame cannot
+ * get out" - the threshold the driver itself aborts on - not "a mailbox was
+ * busy". Ordinary burst contention never reaches it. Spec 10: code 9 is a
+ * warning carrying the frame ID as u16.
+ */
+static void checkTxBlocked(void)
+{
+    if (ehandler == NULL || CAN_TX_FAIL_LIMIT == 0u) { return; }
+
+    uint32_t blockedId = 0u;
+    for (uint8_t i = 0u; i < scheduler.size; i++) {
+        if (scheduler.list[i].txFailCount >= CAN_TX_FAIL_LIMIT) {
+            blockedId = scheduler.list[i].header.StdId;   /* every CAN1 frame is standard */
+            break;
+        }
+    }
+
+    if (blockedId == txFailId) { return; }                /* no edge: nothing to do */
+    if (blockedId != 0u) {
+        const uint8_t blob[5] = { (uint8_t)(blockedId & 0xFFu),
+                                  (uint8_t)((blockedId >> 8) & 0xFFu), 0u, 0u, 0u };
+        EH_reportEx(ehandler, BMS_ERR_CAN1_TX_FAIL, ERROR_SEVERITY_WARNING, blob, 2u);
+    } else {
+        EH_clear(ehandler, BMS_ERR_CAN1_TX_FAIL);
+    }
+    txFailId = blockedId;
+}
+
 void CAN_App_Task(void)
 {
     CAN_HandleScheduled(can1, &scheduler);
+    checkTxBlocked();
 }
 
 void CAN_App_OnRx1(CAN_HandleTypeDef *hcan)

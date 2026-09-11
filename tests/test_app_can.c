@@ -4,6 +4,7 @@
 #include "app_therm.h"
 #include "app_jk.h"
 #include "bms_calib.h"
+#include "bms_errors.h"
 #include "CAN_DB.h"
 #include "main.h"
 
@@ -185,6 +186,59 @@ TEST(safe_state_frames_route_to_the_contactor_and_thermistors_do_not)
     CHECK_EQ(THERM_Filtered(1u, 1u), 0u);     /* nothing queued: no spurious writes */
 }
 
+/* One pass per millisecond over a window, without restarting at tick 0. */
+static void pumpFrom(uint32_t fromMs, uint32_t untilMs)
+{
+    for (uint32_t t = fromMs; t <= untilMs; t++) {
+        Fake_SetTick(t);
+        CAN_App_Task();
+    }
+}
+
+TEST(burst_contention_alone_never_reports_a_tx_fault)
+{
+    setup();
+    EH_init(&eh, &h1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
+    /* Nineteen of the twenty frames fall due in the same pass against three
+       mailboxes, so failed enqueues are routine here. Code 9 must mean "this
+       frame cannot get out", never "a mailbox was busy". */
+    pump(10000u);
+    CHECK(Fake_TxCountFor(BMSMASTER_JK_CYCLESTATS_FRAME_ID) > 0u);
+    CHECK_EQ(eh.activeErrorCount, 0u);
+}
+
+TEST(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery)
+{
+    setup();
+    EH_init(&eh, &h1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
+    pump(1010u);
+    CHECK_EQ(eh.activeErrorCount, 0u);
+
+    /* Bus-off, missing termination or no ACK: the mailboxes never free. The
+       driver aborts after CAN_TX_FAIL_LIMIT missed periods; before this fix it
+       did so silently and the vehicle never learned CAN1 TX was failing. */
+    Fake_HoldCanTx(1);
+    pumpFrom(1011u, 5000u);
+    CHECK(Fake_CanAbortCount() > 0u);
+    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_CAN1_TX_FAIL);
+    CHECK_EQ(eh.activeErrors[0].severity, ERROR_SEVERITY_WARNING);
+
+    /* Spec 10: the payload is the frame ID as a little-endian u16. */
+    CHECK_EQ(eh.activeErrors[0].specificDataLen, 2u);
+    const uint32_t reported = (uint32_t)eh.activeErrors[0].specificData[0]
+                            | ((uint32_t)eh.activeErrors[0].specificData[1] << 8);
+    int registered = 0;
+    for (uint8_t i = 0u; i < CAN_App_Scheduler()->size; i++) {
+        if (CAN_App_Scheduler()->list[i].header.StdId == reported) { registered = 1; }
+    }
+    CHECK(registered);
+
+    Fake_HoldCanTx(0);
+    pumpFrom(5001u, 8000u);
+    CHECK_EQ(eh.activeErrorCount, 0u);
+}
+
 int main(void)
 {
     RUN(both_transceivers_leave_standby_before_the_buses_start);
@@ -198,5 +252,7 @@ int main(void)
     RUN(can1_filter_admits_only_the_safe_state_ids);
     RUN(can2_filter_admits_the_thermistor_range_and_rejects_others);
     RUN(safe_state_frames_route_to_the_contactor_and_thermistors_do_not);
+    RUN(burst_contention_alone_never_reports_a_tx_fault);
+    RUN(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery);
     return TEST_SUMMARY();
 }
