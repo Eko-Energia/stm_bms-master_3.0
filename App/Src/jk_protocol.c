@@ -10,11 +10,22 @@
    this only guards the SOH multiply against a corrupt-but-checksummed frame. */
 #define JKP_CAPACITY_MAX_AH (100000u)
 
+/* Publishing bounds: the narrower of the JK register range and the CAN_DB
+   signal range. A value outside them is a corrupt register, not a reading,
+   so the frame is rejected rather than clamped into something plausible. */
+#define JKP_TEMP_RAW_MAX    (140u)    /* 0x80/0x81, 140 = -40 degC            */
+#define JKP_SOC_MAX_PCT     (100u)    /* 0x85                                 */
+#define JKP_CENTIVOLTS_MAX  (10000u)  /* 0x83, BMSMaster_JK_PackVoltage       */
+#define JKP_CENTIAMPS_MAX   (30000)   /* 0x84, BMSMaster_JK_PackCurrent       */
+#define JKP_STRINGS_MIN     (3u)      /* 0x8a, protocol range is 3..32        */
+#define JKP_MODE_FLAGS_MASK (0x0Fu)   /* 0x8c, bits 4..15 are reserved        */
+#define JKP_SOH_MAX_PCT     (110u)    /* slightly over rated is real, far over is not */
+
 /*
  * Data length for each identifier, excluding the identifier byte itself.
- * 0 means "unknown", which stops the walk: without a length there is no way
- * to find the next identifier. Older firmware omits fields, so a short
- * payload is normal, not an error.
+ * 0 means "unknown", which rejects the frame: without a length there is no way
+ * to find the next identifier. Older firmware omits fields, so a payload that
+ * ends early is normal; one that stops mid-walk is not.
  */
 static uint8_t identLen(uint8_t ident)
 {
@@ -47,10 +58,15 @@ static uint32_t be32(const uint8_t *p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
-/* 0-100 is positive degC directly; above 100 the value is negative, 101 = -1. */
-static int8_t decodeTemp(uint16_t raw)
+/* 0-100 is positive degC directly; 101-140 is negative, 101 = -1. Any higher
+   raw is undefined and would truncate into int8_t, half of it as a positive. */
+static bool decodeTemp(uint16_t raw, int8_t *out)
 {
-    return (raw > 100u) ? (int8_t)-(int16_t)(raw - 100u) : (int8_t)raw;
+    if (raw > JKP_TEMP_RAW_MAX) {
+        return false;
+    }
+    *out = (raw > 100u) ? (int8_t)-(int16_t)(raw - 100u) : (int8_t)raw;
+    return true;
 }
 
 /*
@@ -109,6 +125,11 @@ bool JKP_Validate(const uint8_t *buf, uint16_t len)
     if (buf[len - 5u] != JKP_END_FLAG) {
         return false;
     }
+    /* The CRC16 slot is disabled and declared zero. It sits outside the sum,
+       so leaving it unchecked is 16 freely malleable bits. */
+    if (buf[len - 4u] != 0u || buf[len - 3u] != 0u) {
+        return false;
+    }
 
     uint16_t sum = 0u;
     for (uint16_t i = 0u; i <= (uint16_t)(len - 5u); i++) {
@@ -122,7 +143,11 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
     if (out == NULL || !JKP_Validate(buf, len)) {
         return false;
     }
-    memset(out, 0, sizeof *out);
+
+    /* Filled locally and published only on success, so a rejected frame
+       leaves the caller's struct alone. */
+    JK_Data_t d;
+    memset(&d, 0, sizeof d);
 
     uint32_t capacitySet = 0u, capacityActual = 0u;
     bool haveSet = false, haveActual = false;
@@ -136,20 +161,20 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
         const uint8_t ident = buf[i];
 
         if (ident == 0x79u) {                    /* length-prefixed cell block */
-            if ((uint16_t)(i + 2u) > payloadEnd) { break; }
+            if ((uint16_t)(i + 2u) > payloadEnd) { return false; }
             const uint8_t blockLen = buf[i + 1u];
-            if ((uint16_t)(i + 2u + blockLen) > payloadEnd) { break; }
-            /* A pack is 21S; a reported count above that is a fault - those
-               cells would be invisible to the vehicle, so reject the frame
-               rather than silently drop the overflow. */
-            if ((uint16_t)(blockLen / 3u) > JKP_CELLS_MAX) {
+            if ((uint16_t)(i + 2u + blockLen) > payloadEnd) { return false; }
+            /* 3 bytes per cell and a pack is 21S. A partial group, an
+               over-long block or a cell number outside 1..21 means cells the
+               vehicle would never see, so reject the frame rather than
+               silently drop them - 0 mV is also the link-down state. */
+            if ((blockLen % 3u) != 0u || (blockLen / 3u) > JKP_CELLS_MAX) {
                 return false;
             }
             for (uint8_t g = 0u; (uint16_t)(g + 3u) <= blockLen; g = (uint8_t)(g + 3u)) {
                 const uint8_t cellNo = buf[i + 2u + g];
-                if (cellNo >= 1u && cellNo <= JKP_CELLS_MAX) {
-                    out->cellMillivolts[cellNo - 1u] = be16(&buf[i + 3u + g]);
-                }
+                if (cellNo < 1u || cellNo > JKP_CELLS_MAX) { return false; }
+                d.cellMillivolts[cellNo - 1u] = be16(&buf[i + 3u + g]);
             }
             i = (uint16_t)(i + 2u + blockLen);
             continue;
@@ -157,31 +182,43 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
 
         const uint8_t dlen = identLen(ident);
         if (dlen == 0u || (uint16_t)(i + 1u + dlen) > payloadEnd) {
-            break;                               /* unknown length: cannot continue */
+            /* Unknown identifier, or one whose data runs past the payload: the
+               walk cannot continue, and every field behind it would publish 0.
+               0 mV is the link-down state, so that reads as a dead link on a
+               frame we just called good. */
+            return false;
         }
         const uint8_t *v = &buf[i + 1u];
 
         switch (ident) {
-        case 0x80u: out->mosTempC = decodeTemp(be16(v)); break;
-        case 0x81u: out->balTempC = decodeTemp(be16(v)); break;
-        case 0x83u: out->packCentivolts = be16(v); break;
-        case 0x84u: currentRaw = be16(v); haveCurrent = true; break;
-        case 0x85u: out->soc = v[0]; break;
-        case 0x87u: out->cycles = be16(v); break;
-        case 0x8Au: {
-            /* Same rule as the 0x79 block above (spec 7.5): a reported count
-               over 21 means cells the vehicle cannot see, so reject the frame
-               rather than truncate it onto the bus. */
-            const uint16_t count = be16(v);
-            if (count > JKP_CELLS_MAX) { return false; }
-            out->cellCount = (uint8_t)count;
+        case 0x80u: if (!decodeTemp(be16(v), &d.mosTempC)) { return false; } break;
+        case 0x81u: if (!decodeTemp(be16(v), &d.balTempC)) { return false; } break;
+        case 0x83u: {
+            const uint16_t centivolts = be16(v);
+            if (centivolts > JKP_CENTIVOLTS_MAX) { return false; }
+            d.packCentivolts = centivolts;
             break;
         }
-        case 0x8Bu: out->statusFlags = curateWarnings(be16(v)); break;
-        case 0x8Cu: out->modeFlags = (uint8_t)(be16(v) & 0xFFu); break;
+        /* 0.01 A since protocol V20200508; older JK firmware reports 0.1 A - a silent 10x. */
+        case 0x84u: currentRaw = be16(v); haveCurrent = true; break;
+        case 0x85u:
+            if (v[0] > JKP_SOC_MAX_PCT) { return false; }
+            d.soc = v[0];
+            break;
+        case 0x87u: d.cycles = be16(v); break;
+        case 0x8Au: {
+            /* Protocol range is 3..32 strings; over 21 means cells the vehicle
+               cannot see (spec 7.5). Either way the frame is rejected. */
+            const uint16_t count = be16(v);
+            if (count < JKP_STRINGS_MIN || count > JKP_CELLS_MAX) { return false; }
+            d.cellCount = (uint8_t)count;
+            break;
+        }
+        case 0x8Bu: d.statusFlags = curateWarnings(be16(v)); break;
+        case 0x8Cu: d.modeFlags = (uint8_t)(be16(v) & JKP_MODE_FLAGS_MASK); break;
         case 0xAAu: capacitySet = be32(v); haveSet = true; break;
         case 0xB9u: capacityActual = be32(v); haveActual = true; break;
-        case 0xC0u: out->protocolVersion = v[0]; break;
+        case 0xC0u: d.protocolVersion = v[0]; break;
         default: break;                          /* known length, not needed */
         }
         i = (uint16_t)(i + 1u + dlen);
@@ -193,14 +230,21 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
      * directly. The JK itself uses the opposite sign.
      * 0xc0 selects between the two encodings and is indistinguishable at low
      * current, which is why it must be parsed before this runs.
+     * Computed in int32_t: the offset encoding reaches +55535 centiamps, which
+     * wraps to a charging current if narrowed straight to int16_t.
      */
     if (haveCurrent) {
-        if (out->protocolVersion == 0x01u) {
-            const int16_t mag = (int16_t)(currentRaw & 0x7FFFu);
-            out->packCentiamps = (currentRaw & 0x8000u) ? (int16_t)-mag : mag;
+        int32_t centiamps;
+        if (d.protocolVersion == 0x01u) {
+            const int32_t mag = (int32_t)(currentRaw & 0x7FFFu);
+            centiamps = (currentRaw & 0x8000u) ? -mag : mag;
         } else {
-            out->packCentiamps = (int16_t)((int32_t)currentRaw - 10000);
+            centiamps = (int32_t)currentRaw - 10000;
         }
+        if (centiamps < -JKP_CENTIAMPS_MAX || centiamps > JKP_CENTIAMPS_MAX) {
+            return false;
+        }
+        d.packCentiamps = (int16_t)centiamps;
     }
 
     /* The protocol has no SOH register; this is the only health figure it exposes.
@@ -209,9 +253,13 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
        plausible-but-wrong SOH instead of an obvious failure. */
     if (haveSet && haveActual && capacitySet > 0u
         && capacitySet <= JKP_CAPACITY_MAX_AH && capacityActual <= JKP_CAPACITY_MAX_AH) {
-        uint32_t soh = (capacityActual * 100u + capacitySet / 2u) / capacitySet;  /* rounded */
-        if (soh > 100u) { soh = 100u; }
-        out->soh = (uint8_t)soh;
+        const uint32_t soh = (capacityActual * 100u + capacitySet / 2u) / capacitySet;  /* rounded */
+        /* A little over rated is a real measurement and clamps to 100; far over
+           is a corrupt register, and clamping it would publish perfect health. */
+        if (soh > JKP_SOH_MAX_PCT) { return false; }
+        d.soh = (uint8_t)((soh > 100u) ? 100u : soh);
     }
+
+    *out = d;
     return true;
 }
