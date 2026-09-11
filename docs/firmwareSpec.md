@@ -728,6 +728,11 @@ value.
 | 7 | `PACK_CURRENT_HIGH` | error | deciamps `i16` |
 | 8 | `TEMP_SENSOR_FAULT` | error | raw count `u16` |
 | 9 | `CAN1_TX_FAIL` | warning | frame ID `u16` |
+
+Code 9 has **two** raisers: `CAN_AddScheduledMsg` rejecting a frame at init, and `CAN_App_Task`
+noticing at runtime that a frame has crossed the driver's `CAN_TX_FAIL_LIMIT` of missed periods.
+The runtime one is edge-triggered on the blocked frame's ID, so ordinary burst contention - which
+clears within a pass - never reports.
 | 10 | `BMS_ERR_FATAL_INIT` | error | none used |
 | 11 | `ADC_STALLED` | error | ms since the last completed ADC scan `u16` |
 
