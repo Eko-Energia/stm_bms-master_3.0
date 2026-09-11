@@ -44,7 +44,11 @@ STM32F105R8T6, Cortex-M3, **no FPU**, 64 KB flash, 64 KB RAM.
 | TIM3 CH3 | PSC 71, ARR 999 -> 1 kHz on PB0 |
 | USART1 | 115200 8N1 on PA9/PA10, RS485 to the JK BMS |
 
-The PCB routes **only** `OSC_IN`; there is no `OSC_OUT`, which is why BYPASS is correct.
+The PCB routes **only** `OSC_IN`; there is no `OSC_OUT`, which is why BYPASS is correct. In
+bypass mode the oscillator amplifier is disabled and PD1 would be free as GPIO, but the `.ioc`
+keeps `PD1-OSC_OUT` **assigned and reserved**: it generates no code (CubeMX emits no GPIO init
+for OSC pins), nothing needs the pin, and if a crystal is ever fitted the switch to
+`RCC_HSE_ON` is then a single change.
 72 MHz is unreachable from HSI on this part (`IS_RCC_PLL_MUL` permits only x4..x9 and x6.5,
 and the HSI path is a fixed 4 MHz), so HSE is mandatory.
 
@@ -54,7 +58,6 @@ Application code never lives in generated files, so these are made in CubeMX and
 
 | Change | Reason |
 | --- | --- |
-| Un-assign `PD1-OSC_OUT` | Reserved in error by commit `5486dbc`; a BYPASS clock source does not use it. Frees PD1. |
 | TIM3 CH3: Output Compare -> **PWM Generation CH3** | **Blocking.** `OCMode = TIM_OCMODE_TIMING` drives no waveform on PB0, so the contactor is never actuated. |
 | ADC sampling `1CYCLE_5` -> **`239CYCLES_5`** (all 3 channels) | 1.5 cycles at 9 MHz is 167 ns; the sample-and-hold cannot charge through a resistor divider or a 10 k NTC. 239.5 cycles = 28 us. |
 | `CAN1_RX0_IRQn` priority 0 -> **2** | Priority 0 is the most urgent in the NVIC. CAN1 RX carries two frames every 5 s; CAN2 RX handles 63 thermistor frames. Equal priority (2) is correct. |
@@ -639,5 +642,5 @@ Per AGENTS.md rule 7:
 | `docs/pwmGeneration.md` | `tim.c` has **no** USER CODE override to PWM1; the `.ioc` is changed instead. |
 | `docs/bmsJk.md` | The JK link is **USART1** on PA9/PA10, not USART2 on PA2/PA3. |
 | `docs/canDatabase.md` | Generated sources live in `EKO_Drivers/CAN/Inc` + `Src` and are committed; document the move step and PR #46. |
-| `docs/pcb.md` | `PD1-OSC_OUT` is not used; note the ADC sampling time and the standby pin polarity. |
+| `docs/pcb.md` | Record `PD1-OSC_OUT` as reserved but not wired, HSE as an external oscillator in BYPASS, the ADC sampling time, and the standby pin polarity. |
 | `docs/index.md` | Add this specification. |
