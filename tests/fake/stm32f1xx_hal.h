@@ -126,6 +126,21 @@ int      Fake_FindTx(uint32_t stdId, uint8_t out[8], uint32_t *atTick);
 uint32_t Fake_TxCountFor(uint32_t stdId);
 GPIO_PinState Fake_PinState(GPIO_TypeDef *port, uint16_t pin);
 void     Fake_SetPin(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState state);
+/* GPIO init surface: app.c's fatal path re-opens GPIOB's clock gate and
+   reconfigures RED_LD, because the SystemClock_Config fault sites run before
+   MX_GPIO_Init. Recorded so a test can assert it happened. */
+#define GPIO_MODE_OUTPUT_PP   (0x01u)
+#define GPIO_NOPULL           (0x00u)
+#define GPIO_SPEED_FREQ_LOW   (0x00u)
+#define __HAL_RCC_GPIOB_CLK_ENABLE()  Fake_EnableGpioClock(GPIOB)
+
+typedef struct { uint32_t Pin; uint32_t Mode; uint32_t Pull; uint32_t Speed; } GPIO_InitTypeDef;
+
+void     HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *cfg);
+void     Fake_EnableGpioClock(GPIO_TypeDef *port);
+uint8_t  Fake_GpioClockEnabled(GPIO_TypeDef *port);
+uint32_t Fake_GpioConfiguredPins(GPIO_TypeDef *port);
+
 uint32_t Fake_LastCompare(void);
 void     Fake_SetCompare(TIM_HandleTypeDef *h, uint32_t ch, uint32_t v);
 void     Fake_QueueUartRx(const uint8_t *data, uint16_t len);

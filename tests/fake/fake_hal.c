@@ -12,6 +12,10 @@ static uint32_t fakeTick;
 static struct { uint32_t id, tick; uint8_t dlc, data[8]; } txLog[MAX_TX];
 static uint32_t txCount;
 static uint16_t pinState[4];
+
+/* One slot per port we care about; only GPIOB is exercised today. */
+static GPIO_TypeDef *gpioClocked[4];
+static uint32_t      gpioConfigured[4];
 static uint32_t lastCompare;
 static uint8_t  uartTx[MAX_UART]; static uint16_t uartTxLen;
 static uint8_t  uartRxQueued[MAX_UART]; static uint16_t uartRxQueuedLen;
@@ -64,6 +68,8 @@ void Fake_Reset(void)
     memset(compareValue, 0, sizeof compareValue);
     memset(filterBanks, 0, sizeof filterBanks);
     memset(rxQ, 0, sizeof rxQ);
+    memset(gpioClocked, 0, sizeof gpioClocked);
+    memset(gpioConfigured, 0, sizeof gpioConfigured);
     /* On hardware, MX_TIM3_Init() -> HAL_TIM_PWM_Init() puts every channel in
        READY before app_main() runs. Match that instead of defaulting to RESET,
        or PWM_Out_Init() sees a state the real board never has. */
@@ -74,6 +80,30 @@ void     Fake_SetTick(uint32_t ms) { fakeTick = ms; }
 uint32_t HAL_GetTick(void)         { return fakeTick; }
 uint32_t Fake_TxCount(void)        { return txCount; }
 uint32_t Fake_LastCompare(void)    { return lastCompare; }
+
+static int gpioSlot(GPIO_TypeDef *port)
+{
+    for (int i = 0; i < 4; i++) { if (gpioClocked[i] == port) { return i; } }
+    for (int i = 0; i < 4; i++) { if (gpioClocked[i] == NULL) { gpioClocked[i] = port; return i; } }
+    return 0;
+}
+
+void Fake_EnableGpioClock(GPIO_TypeDef *port) { (void)gpioSlot(port); }
+
+uint8_t Fake_GpioClockEnabled(GPIO_TypeDef *port)
+{
+    for (int i = 0; i < 4; i++) { if (gpioClocked[i] == port) { return 1u; } }
+    return 0u;
+}
+
+uint32_t Fake_GpioConfiguredPins(GPIO_TypeDef *port) { return gpioConfigured[gpioSlot(port)]; }
+
+void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *cfg)
+{
+    gpioConfigured[gpioSlot(port)] |= cfg->Pin;
+}
+
+
 
 void Fake_SetCompare(TIM_HandleTypeDef *h, uint32_t ch, uint32_t v)
 {
