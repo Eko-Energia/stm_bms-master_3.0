@@ -52,6 +52,22 @@ static int errorIndex(uint16_t code)
     return -1;
 }
 
+TEST(the_filter_is_correct_from_the_first_sample_onward)
+{
+    setup();
+    /* fill 1 and 2 divide by fill itself, and trimmedMean now returns 0 at
+       fill 0 rather than dividing by it. ADC_Task increments the fill before
+       every call, so fill 0 is not reachable from here - this pins the
+       shortest window that is. */
+    feed(calibNtcCount[25], 2108u, 3000u, 1);
+    CHECK_EQ(ADC_PackDecivolts(), 686u);
+    CHECK_EQ(ADC_TempCenti(), 2500u);
+    CHECK_EQ(ADC_PackDeciamps(), 0);
+
+    feed(calibNtcCount[25], 2108u, 3010u, 1);   /* fill 2: plain mean of both */
+    CHECK_EQ(ADC_PackDecivolts(), 687u);        /* mean count 3005 */
+}
+
 TEST(not_ready_until_the_window_has_filled)
 {
     setup();
@@ -273,7 +289,8 @@ TEST(the_liveness_check_survives_the_tick_wrap)
 
 int main(void)
 {
-    RUN(not_ready_until_the_window_has_filled);
+    RUN(the_filter_is_correct_from_the_first_sample_onward);
+RUN(not_ready_until_the_window_has_filled);
     RUN(trimmed_mean_discards_a_single_outlier_entirely);
     RUN(pack_voltage_converts_with_rounding);
     RUN(current_is_signed_around_the_zero_offset);

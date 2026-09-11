@@ -42,6 +42,8 @@ static EH_HandleTypeDef *ehandler;
 
 static uint8_t trimmedMean(const uint8_t *samples, uint8_t fill)
 {
+    if (fill == 0u) { return 0u; }  /* the divisors below are fill and fill-2 */
+
     uint16_t sum = 0u;              /* 10 * 255 = 2550, fits uint16 */
     uint8_t lo = 0xFFu, hi = 0u;
 

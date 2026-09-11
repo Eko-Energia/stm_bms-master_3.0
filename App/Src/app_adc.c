@@ -46,6 +46,8 @@ static bool     stalled;
 /* Mean of the window with the single lowest and single highest sample removed. */
 static uint16_t trimmedMean(const uint16_t *samples, uint8_t fill)
 {
+    if (fill == 0u) { return 0u; }            /* the divisors below are fill and fill-2 */
+
     uint32_t sum = 0u;
     uint16_t lo = 0xFFFFu, hi = 0u;
 

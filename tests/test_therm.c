@@ -58,6 +58,19 @@ static void feedAll(uint8_t raw, int periods)
     }
 }
 
+TEST(the_filter_is_correct_from_the_first_period_onward)
+{
+    setup();
+    /* fill 1 and 2 divide by fill itself, and trimmedMean now returns 0 at
+       fill 0 rather than dividing by it. THERM_Task increments the fill before
+       every call, so fill 0 is not reachable from here - this pins the
+       shortest window that is. */
+    feedAll(100u, 1);
+    CHECK_EQ(THERM_Filtered(1u, 1u), 100u);
+    feedAll(110u, 1);
+    CHECK_EQ(THERM_Filtered(1u, 1u), 105u);     /* fill 2: (100 + 110) / 2 */
+}
+
 TEST(odd_packs_number_upward)
 {
     setup();
@@ -239,6 +252,7 @@ TEST(the_hottest_thermistor_is_located_not_just_measured)
 
 int main(void)
 {
+    RUN(the_filter_is_correct_from_the_first_period_onward);
     RUN(odd_packs_number_upward);
     RUN(even_packs_number_downward);
     RUN(the_last_pack_maps_at_both_ends);
