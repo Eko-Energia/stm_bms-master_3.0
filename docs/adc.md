@@ -48,6 +48,9 @@ Indexing by count rather than by resistance is deliberate: the divider is ratiom
 tolerance in a way a resistance-based one is not - the supply term cancels before it ever reaches
 the lookup.
 
+The table is derived from Bartek's validated resistance table for the fitted part - 10.0 kOhm at
+25 degC, implying B(0/25) = 3297 and B(25/100) = 3441 - and not from a datasheet curve.
+
 Table anchors (measured, not derived from the formula above): count **1092** at 0 degC, **2048**
 at 25 degC, **3143** at 60 degC, **3728** at 100 degC. A count below 1092 clamps to 0 degC, above
 3728 clamps to 100 degC (`TEMP_MAX_CENTI`). Counts far outside the table (below 200 or above 4000)

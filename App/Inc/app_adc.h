@@ -5,8 +5,9 @@
 #include "error_handler.h"
 
 /**
- * @brief Start calibration and circular DMA. The buffer is owned by the caller,
- *        which is what makes this module testable without hardware.
+ * @brief Bind the caller's DMA buffer and error handle, and reset the filter.
+ *        Calibration and HAL_ADC_Start_DMA are started by app.c. The buffer is
+ *        owned by the caller, which makes this module testable without hardware.
  * @param dmaBuf 3 halfwords: rank 1 = PC0 temp, 2 = PC1 current, 3 = PC2 voltage
  */
 void ADC_Init(volatile uint16_t *dmaBuf, EH_HandleTypeDef *eh);

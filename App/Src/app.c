@@ -56,14 +56,9 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
     if (huart == &huart1) { JK_OnRxEvent(size); }
 }
 
-/* Port and pin are compile-time constants from main.h. Bound through a helper
-   so App_OnFatalError can bind them too: 16 of the 18 Error_Handler() call
-   sites run before initAll(), where the handles would still be NULL. */
-/* SystemClock_Config's three fault sites run before MX_GPIO_Init, so GPIOB's
-   clock gate is still shut and writes to it are silently discarded - the LED
-   would stay dark exactly when the board is most broken. RCC is always
-   clocked, so open the gate and configure the pin here. Idempotent: every
-   later path has already done this. */
+/* Three Error_Handler() sites run before MX_GPIO_Init, where a write to the
+   gated GPIOB is silently discarded on the F1. RCC is always clocked, so open
+   the gate here. Idempotent; spec 10. */
 static void forceRedLedUsable(void)
 {
     __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -76,6 +71,8 @@ static void forceRedLedUsable(void)
     HAL_GPIO_Init(RED_LD_GPIO_Port, &cfg);
 }
 
+/* A helper so App_OnFatalError can bind these too: 16 of the 18
+   Error_Handler() sites run before initAll(). */
 static void bindLeds(void)
 {
     ledGreen.GPIO_Port = GREEN_LD_GPIO_Port; ledGreen.GPIO_Pin = GREEN_LD_Pin;
