@@ -128,7 +128,9 @@ void JK_OnTxComplete(void)
 
 void JK_OnRxEvent(uint16_t size)
 {
-    rxLen = size;
+    /* Clamp rather than trust: a size above the armed buffer is a HAL anomaly,
+       and JKP_Validate rejects the frame anyway. */
+    rxLen = (size > JKP_RX_BUF_LEN) ? JKP_RX_BUF_LEN : size;
     rxReady = 1u;
 }
 

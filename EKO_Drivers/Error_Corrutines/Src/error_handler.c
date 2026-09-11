@@ -24,6 +24,8 @@ static void haltNode(EH_HandleTypeDef *hehandler);
 static void getData_HeightbeatOK(uint8_t *data, void *context);
 static void getData_Error(uint8_t *data, void *context);
 static void updateTransmissionInterval(EH_HandleTypeDef *hehandler);
+static void setNodeFrameSource(EH_HandleTypeDef *hehandler,
+                               void (*getData)(uint8_t *, void *), uint32_t periodMs);
 
 /* ============================================================================
  * Initialization Functions
@@ -179,21 +181,7 @@ void EH_reportEx(EH_HandleTypeDef *hehandler, uint16_t errorCode, errorSeverity_
 	// First error inserted: Setup error scheduler message.
 	// Repeat reports must not re-install it, that would reset lastTick and starve the frame.
 	if (isNewError && hehandler->activeErrorCount == 1 && existingIndex == 0) {
-		CAN_RemoveScheduledMsg(hehandler->errorFrameId, hehandler->scheduler);
-
-		struct CAN_scheduledMsg errorMsg;
-		errorMsg.header.StdId = hehandler->errorFrameId;
-		errorMsg.header.ExtId = 0;
-		errorMsg.header.IDE = CAN_ID_STD;
-		errorMsg.header.RTR = CAN_RTR_DATA;
-		errorMsg.header.DLC = ERROR_FRAME_DLC;
-		errorMsg.header.TransmitGlobalTime = DISABLE;
-		errorMsg.periodMs = ERROR_INTERVAL;
-		errorMsg.lastTick = 0;
-		errorMsg.getData = getData_Error;
-		errorMsg.context = hehandler;
-
-		CAN_AddScheduledMsg(&errorMsg, hehandler->scheduler);
+		setNodeFrameSource(hehandler, getData_Error, ERROR_INTERVAL);
 	}
 
 	updateTransmissionInterval(hehandler);
@@ -245,22 +233,7 @@ void EH_clear(EH_HandleTypeDef *hehandler, uint16_t errorCode)
 		}
 
 		if (hehandler->activeErrorCount == 0) {
-			// Switch scheduler to Heartbeat OK Mode
-			CAN_RemoveScheduledMsg(hehandler->errorFrameId, hehandler->scheduler);
-
-			struct CAN_scheduledMsg heartbeatMsg;
-			heartbeatMsg.header.StdId = hehandler->errorFrameId;
-			heartbeatMsg.header.ExtId = 0;
-			heartbeatMsg.header.IDE = CAN_ID_STD;
-			heartbeatMsg.header.RTR = CAN_RTR_DATA;
-			heartbeatMsg.header.DLC = ERROR_FRAME_DLC;
-			heartbeatMsg.header.TransmitGlobalTime = DISABLE;
-			heartbeatMsg.periodMs = HEARTBEAT_INTERVAL;
-			heartbeatMsg.lastTick = 0;
-			heartbeatMsg.getData = getData_HeightbeatOK;
-			heartbeatMsg.context = hehandler;
-
-			CAN_AddScheduledMsg(&heartbeatMsg, hehandler->scheduler);
+			setNodeFrameSource(hehandler, getData_HeightbeatOK, HEARTBEAT_INTERVAL);
 		} else {
 			updateTransmissionInterval(hehandler);
 		}
@@ -290,6 +263,23 @@ uint8_t EH_isInitialized(EH_HandleTypeDef *hehandler)
 /* ============================================================================
  * Internal Sizing Callback
  * ============================================================================ */
+/* Swap the node frame's payload source without re-adding it. Removing and
+   re-adding resets lastTick, and a fault that flutters would then restart the
+   period on every transition and starve the frame. */
+static void setNodeFrameSource(EH_HandleTypeDef *hehandler,
+                               void (*getData)(uint8_t *, void *), uint32_t periodMs)
+{
+	if (hehandler == NULL || hehandler->scheduler == NULL) return;
+
+	for (uint8_t i = 0; i < hehandler->scheduler->size; i++) {
+		if (hehandler->scheduler->list[i].header.StdId == hehandler->errorFrameId) {
+			hehandler->scheduler->list[i].getData  = getData;
+			hehandler->scheduler->list[i].periodMs = periodMs;
+			return;
+		}
+	}
+}
+
 static void updateTransmissionInterval(EH_HandleTypeDef *hehandler)
 {
 	if (hehandler == NULL || hehandler->scheduler == NULL || hehandler->activeErrorCount == 0) return;

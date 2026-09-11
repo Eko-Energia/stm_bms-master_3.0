@@ -113,7 +113,9 @@ uint16_t JKP_BuildRequest(uint8_t *out, uint8_t cmd)
 
 bool JKP_Validate(const uint8_t *buf, uint16_t len)
 {
-    if (buf == NULL || len < JKP_OVERHEAD) {
+    /* len is the DMA's reported size: untrusted. Above the declared buffer the
+       trailing reads below would run past the caller's array. */
+    if (buf == NULL || len < JKP_OVERHEAD || len > JKP_RX_BUF_LEN) {
         return false;
     }
     if (buf[0] != 0x4Eu || buf[1] != 0x57u) {
