@@ -105,16 +105,24 @@ Bare-metal cooperative superloop. **No RTOS**: no tasks, no queues, no scheduler
 calls. Cadence comes from `HAL_GetTick()` comparisons and the CAN transmit scheduler.
 
 ```
-App/Inc/    app.h  app_adc.h  app_can.h  app_contactor.h
-            app_jk.h  app_therm.h  app_timing.h  jk_protocol.h  bms_errors.h
-App/Src/    app.c  app_adc.c  app_can.c  app_contactor.c
-            app_jk.c  app_therm.c  jk_protocol.c
+App/Inc/    app.h  app_adc.h  app_can.h  app_contactor.h  app_thermal.h
+            app_jk.h  app_therm.h  app_timing.h  jk_protocol.h
+            bms_errors.h  bms_calib.h
+App/Src/    app.c  app_adc.c  app_can.c  app_contactor.c  app_thermal.c
+            app_jk.c  app_therm.c  jk_protocol.c  bms_calib.c
 EKO_Drivers/CAN/              Inc/{can_driver,CAN_DB,CAN2_DB}.h  Src/{can_driver,CAN_DB,CAN2_DB}.c
 EKO_Drivers/LED/              Inc/led_driver.h    Src/led_driver.c      (imported)
 EKO_Drivers/Error_Corrutines/ Inc/error_handler.h Src/error_handler.c   (imported)
 ```
 
-`main.c` gains one line, `app_main();` in `USER CODE BEGIN 2`.
+`main.c` gains three lines, all inside `USER CODE` sections: `#include "app.h"`,
+`app_main();` in `USER CODE BEGIN 2`, and `App_OnFatalError();` in
+`USER CODE BEGIN Error_Handler_Debug`.
+
+`app.c` holds **no logic** - init order, ISR dispatch, the `HAL_IncTick`
+override and three lines of LED policy. Everything that decides anything lives
+in a module that can be tested. That is why there are **no test-only symbols
+anywhere in the project**.
 
 ### 3.1 State ownership
 
@@ -134,7 +142,9 @@ small interface, testable *through* that interface rather than past it:
    interface for no caller's benefit.
 2. **Accept time; do not read the clock.** `app.c` calls `HAL_GetTick()` once per pass and passes
    `nowMs` to the two time-dependent modules. Tests drive time with no stubbing, and every module
-   sees a consistent "now" within one iteration.
+   sees a consistent "now" within one iteration. This holds in interrupt context too: the
+   contactor's RX handler sets a flag and `CONTACTOR_Task(now)` timestamps it, rather than
+   reaching for the clock where no tick can be passed in.
 3. **Modules raise their own faults** through `EH_reportEx()`, so thresholds live next to the
    values they judge rather than in a central evaluator.
 4. **Constants are private, with one deliberate exception.** Behavioural numbers - window
@@ -146,7 +156,7 @@ Shared timing helper, so the pattern is not repeated seven times:
 
 ```c
 /* app_timing.h - true once per periodMs; advances *last by whole periods, wrap-safe */
-bool Timing_Due(uint32_t *last, uint32_t periodMs);
+bool Timing_Due(uint32_t now, uint32_t *last, uint32_t periodMs);
 ```
 
 ### 3.2 Main loop
@@ -170,11 +180,12 @@ void app_main(void)
         uint32_t now = HAL_GetTick();
 
         ADC_Task();
-        if (Timing_Due(&thermTick, 1000u)) {
+        if (Timing_Due(now, &thermTick, 1000u)) {
             THERM_Task();
         }
         JK_Task(now);
         CONTACTOR_Task(now);
+        THERMAL_Evaluate(ADC_Ready(), ADC_TempCenti(), THERM_MaxRaw());
 
         LED_STATE_e want = (eh.activeErrorCount > 0u) ? LED_ON : LED_OFF;
         if (ledRed.state != want) {
@@ -582,6 +593,9 @@ STM32F105 has 28 filter banks shared between the peripherals; `SlaveStartFilterB
 All periods come from `GenMsgCycleTime` in the database. **21 frames**, so
 `CAN_MAX_MSG` is raised from 20 to **28**.
 
+`app_can` registers **20** of them. `EH_init` registers frame 128 itself, which
+is why `CAN_App_Init` runs before it and exposes `CAN_App_Scheduler()`.
+
 | ID | Frame | DLC | Period |
 | ---: | --- | ---: | ---: |
 | 128 | `BMSMaster_NODE` | 8 | 5000 ms |
@@ -649,6 +663,17 @@ Codes 1 and 2 come from the team's CSV registry; 3-9 are allocated here and must
 it. The codes live in one header of constants, `App/Inc/bms_errors.h` - not a module. Each
 module reports its own faults via `EH_reportEx(&eh, code, severity, data, len)` and clears them
 with `EH_clear()`, so thresholds sit next to the values they judge.
+
+Two exceptions, both because the judgement spans more than one module:
+
+- **Codes 1 and 2**, the 60 degC limits, are evaluated by `app_thermal`:
+  `THERMAL_Evaluate(boardValid, boardCenti, packMaxRaw)`. It compares the on-board NTC against
+  the hottest pack thermistor, so it belongs to neither `app_adc` nor `app_therm`. It takes
+  values rather than calling getters, which is what keeps it testable without a fake HAL - and
+  what keeps `app.c` free of logic. Hysteresis: 60 degC to raise, 57 degC to clear on the board
+  sensor; raw 153 to raise, 145 to clear on the pack, at 0.39216 degC per count.
+- **Code 9** `CAN1_TX_FAIL` is also raised by `app_can` when `CAN_AddScheduledMsg` rejects a
+  frame at init, since a frame that never registered will never transmit.
 
 **No fault emits severity 0.** The CSV grades codes 1 and 2 as `ERROR`, and the old
 implementation's use of `ERROR_SEVERITY_SAFE_STATE` for `BMS_TEMP_HIGH` is not followed. That
@@ -724,6 +749,11 @@ anywhere in `App/`**. The host build compiles the same unmodified `App/Src/*.c` 
 `tests/fake/` in place of the real HAL, so application code is identical in both builds. This is
 permanent test infrastructure, not scaffolding to be removed.
 
+Note what this does *not* require: there are **no test-only symbols in `App/`**. The fake works
+by link substitution, and every module that holds logic is reachable through its ordinary
+interface. Where that was not true - the 60 degC policy sitting inside a superloop that never
+returns - the logic was moved into a module rather than the interface being widened to reach it.
+
 ### 12.1 Target build, no board required
 
 `stm32_build` drives the CubeIDE headless builder with nothing attached, and gives:
@@ -746,6 +776,7 @@ testing. Nothing is added to a public interface for a test's benefit.
 | `app_adc`, via the injected DMA buffer | NTC LUT and interpolation, trimmed mean, all three conversions, DBC clamping, open/short fault bands |
 | `app_therm`, via `THERM_OnFrame()` + `THERM_Task()` | the non-monotonic ID map including an **even** pack, trimmed mean, warm-up below `fill = 3`, silent-pack detection at three misses |
 | `jk_protocol`, directly - it is already pure | accumulated checksum, `LENGTH` semantics, TLV walk, length-prefixed `0x79`, both `0x84` encodings, sign negation, flag curation |
+| `app_thermal`, directly - it takes values, not getters | both 60 degC limits, hysteresis in each direction, and that an invalid board reading is not judged |
 
 ### 12.3 Fake HAL: running the application off-target
 
