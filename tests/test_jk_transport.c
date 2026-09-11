@@ -71,6 +71,16 @@ static void exchange(uint32_t now, const uint8_t *reply, uint16_t replyLen)
     JK_Task(now);
 }
 
+/* One poll that goes out and is never answered. */
+static void timeout(uint32_t now)
+{
+    Fake_SetTick(now);
+    JK_Task(now);                   /* the poll goes out */
+    JK_OnTxComplete();              /* arms the receiver; no reply queued */
+    Fake_SetTick(now + 150u);
+    JK_Task(now + 150u);            /* past the 100 ms timeout */
+}
+
 TEST(the_first_exchange_sends_the_activation_command)
 {
     setup();
@@ -251,16 +261,15 @@ TEST(the_100ms_response_timeout_survives_the_tick_wrap)
     exchange(1000u, reply, n);
     CHECK(JK_Valid());
 
-    /* Send the next poll right at the wrap, then let it go unanswered. */
+    /* Send the next poll right at the wrap, then let it go unanswered: the
+       100 ms deadline lands 99 ms past 0xFFFFFFFF. */
     const uint32_t nearWrap = 0xFFFFFFFFu - 50u;
-    Fake_SetTick(nearWrap);
-    JK_Task(nearWrap);              /* sends the next read-all; requestMs = nearWrap */
-    JK_OnTxComplete();              /* arms the receiver; no reply queued */
-
-    const uint32_t afterWrap = nearWrap + 150u;   /* wraps past 0xFFFFFFFF to 99 */
-    Fake_SetTick(afterWrap);
-    JK_Task(afterWrap);             /* 150 ms elapsed: past the 100 ms timeout */
+    timeout(nearWrap);
     CHECK(!JK_Valid());
+
+    /* Two more unanswered polls, also across the wrap, reach the limit. */
+    timeout(nearWrap + 1000u);
+    timeout(nearWrap + 2000u);
     CHECK(eh.activeErrorCount > 0u);
 }
 
@@ -281,18 +290,20 @@ TEST(a_failed_transmit_start_is_reported_and_counted)
     JK_Task(2000u);
     CHECK(!JK_Valid());
     CHECK_EQ(JK_Data()->soc, 70u);      /* one strike: data still held */
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK_EQ(eh.activeErrorCount, 0u);  /* and not yet a bus fault */
 
     Fake_ForceUartTxFail();
     Fake_SetTick(3000u);
     JK_Task(3000u);
     CHECK_EQ(JK_Data()->soc, 70u);      /* two strikes: still held */
+    CHECK_EQ(eh.activeErrorCount, 0u);
 
     Fake_ForceUartTxFail();
     Fake_SetTick(4000u);
     JK_Task(4000u);
     CHECK(!JK_Valid());
-    CHECK_EQ(JK_Data()->soc, 0u);       /* three strikes: zeroed */
+    CHECK_EQ(JK_Data()->soc, 0u);       /* three strikes: zeroed and reported */
+    CHECK(eh.activeErrorCount > 0u);
 }
 
 TEST(an_activation_reply_is_never_published_as_data)
@@ -311,22 +322,27 @@ TEST(an_activation_reply_is_never_published_as_data)
     CHECK_EQ(JK_Data()->soc, 77u);
 
     /* The link drops, which arms an activation on the next poll. */
-    Fake_SetTick(2000u);
-    JK_Task(2000u);
-    JK_OnTxComplete();
-    JK_Task(2150u);                         /* past the 100 ms timeout */
+    timeout(2000u);
     CHECK(!JK_Valid());
-    CHECK(eh.activeErrorCount > 0u);
 
     /* Reconnect. The ack must not put 0 % SOC and 0 mV cells on the bus as
-       healthy, and must not clear the comms fault. */
+       healthy: one strike in, the last real reading is still held. */
     exchange(3000u, ack, a);
     CHECK(!JK_Valid());
     CHECK_EQ(JK_Data()->soc, 77u);          /* held, not overwritten with zeros */
+
+    /* Two more dropped polls reach JK_FAIL_LIMIT and raise the comms fault. */
+    timeout(4000u);
+    timeout(5000u);
+    CHECK(eh.activeErrorCount > 0u);
+
+    /* A second ack must not clear that fault either. */
+    exchange(6000u, ack, a);
+    CHECK(!JK_Valid());
     CHECK(eh.activeErrorCount > 0u);
 
     /* The read-all that follows is what actually restores the link. */
-    exchange(4000u, reply, n);
+    exchange(7000u, reply, n);
     CHECK(JK_Valid());
     CHECK_EQ(eh.activeErrorCount, 0u);
 }
@@ -345,16 +361,82 @@ TEST(frame_invalid_is_graded_warning_and_a_timeout_error)
     /* Spec 10 grades code 5 a warning; severity drives eviction priority. */
     CHECK_EQ(eh.activeErrors[0].severity, ERROR_SEVERITY_WARNING);
 
-    Fake_SetTick(2000u);
-    JK_Task(2000u);
-    JK_OnTxComplete();
-    JK_Task(2150u);
+    /* The counter is shared, so two more failures reach JK_FAIL_LIMIT and the
+       timeout path adds code 4 alongside the standing warning. */
+    timeout(2000u);
+    timeout(3000u);
     CHECK_EQ(eh.activeErrorCount, 2u);
     for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
         if (eh.activeErrors[i].errorCode == BMS_ERR_JK_COMMS_TIMEOUT) {
             CHECK_EQ(eh.activeErrors[i].severity, ERROR_SEVERITY_ERROR);
         }
     }
+}
+
+TEST(one_dropped_poll_is_not_a_bus_fault)
+{
+    setup();
+    uint8_t reply[64];
+    const uint16_t n = makeSocResponse(reply, 60u);
+    exchange(0u, reply, n);
+    exchange(1000u, reply, n);
+
+    /* Spec 7.3: three consecutive failures raise code 4. One dropped poll on a
+       noisy RS485 line must not take an error slot from a real fault. */
+    timeout(2000u);
+    CHECK(!JK_Valid());
+    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(JK_Data()->soc, 60u);          /* nor discard the last reading */
+
+    timeout(3000u);
+    CHECK_EQ(eh.activeErrorCount, 0u);
+
+    timeout(4000u);
+    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_JK_COMMS_TIMEOUT);
+}
+
+TEST(the_comms_fault_reports_the_post_increment_failure_count)
+{
+    setup();
+    uint8_t reply[64];
+    const uint16_t n = makeSocResponse(reply, 60u);
+    exchange(0u, reply, n);
+    exchange(1000u, reply, n);
+
+    timeout(2000u);
+    timeout(3000u);
+    timeout(4000u);
+    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_JK_COMMS_TIMEOUT);
+    /* Spec 10: code 4 carries "consecutive failures", so the third failure
+       reports 3 - not the pre-increment 2. */
+    CHECK_EQ(eh.activeErrors[0].specificDataLen, 1u);
+    CHECK_EQ(eh.activeErrors[0].specificData[0], 3u);
+}
+
+TEST(a_frame_error_does_not_re_arm_activation)
+{
+    setup();
+    uint8_t reply[64];
+    const uint16_t n = makeSocResponse(reply, 60u);
+    exchange(0u, reply, n);
+    exchange(1000u, reply, n);
+    CHECK(JK_Valid());
+
+    uint8_t bad[64];
+    memcpy(bad, reply, n);
+    bad[n - 1u] ^= 0xFFu;                   /* break the checksum */
+    exchange(2000u, bad, n);
+    CHECK(!JK_Valid());
+
+    /* Spec 7.3: 0x01 goes out again only after a timeout. Re-arming it on a
+       framing glitch spends a whole poll on activation and halves the rate. */
+    Fake_Reset();
+    JK_Task(3000u);
+    uint8_t sent[JKP_REQUEST_LEN];
+    Fake_LastUartTx(sent, sizeof sent);
+    CHECK_EQ(sent[8], JKP_CMD_READ_ALL);
 }
 
 int main(void)
@@ -374,5 +456,8 @@ int main(void)
     RUN(a_failed_transmit_start_is_reported_and_counted);
     RUN(an_activation_reply_is_never_published_as_data);
     RUN(frame_invalid_is_graded_warning_and_a_timeout_error);
+    RUN(one_dropped_poll_is_not_a_bus_fault);
+    RUN(the_comms_fault_reports_the_post_increment_failure_count);
+    RUN(a_frame_error_does_not_re_arm_activation);
     return TEST_SUMMARY();
 }

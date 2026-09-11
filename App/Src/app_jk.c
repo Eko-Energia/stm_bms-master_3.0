@@ -56,7 +56,8 @@ static void report(uint16_t code, uint8_t detail)
     }
 }
 
-static void onFailure(uint16_t code, uint8_t detail)
+/* Common tail of both failure paths; returns the new consecutive-failure count. */
+static uint8_t endFailedPoll(void)
 {
     if (failCount < JK_FAIL_LIMIT) { failCount++; }
     linkValid = false;                     /* this poll did not decode: link is down now */
@@ -64,10 +65,26 @@ static void onFailure(uint16_t code, uint8_t detail)
         /* Three strikes: publish zeroed payloads rather than stale cell voltages. */
         memset(&data, 0, sizeof data);
     }
-    needActivation = true;                 /* the BMS may have gone to sleep */
-    report(code, detail);
     setDirection(DE_IDLE, RE_LISTENING);
     state = JK_IDLE;
+    return failCount;
+}
+
+/* Spec 7.3: only three consecutive failures raise code 4, and only a timeout
+   re-arms 0x01 - activation exists for a BMS that has gone to sleep. */
+static void onTimeout(void)
+{
+    const uint8_t failures = endFailedPoll();
+    needActivation = true;
+    if (failures >= JK_FAIL_LIMIT) { report(BMS_ERR_JK_COMMS_TIMEOUT, failures); }
+}
+
+/* Spec 7.3: a per-frame warning, reported at once. A framing glitch is not a
+   sleeping BMS, so it must not re-arm activation and halve the poll rate. */
+static void onFrameInvalid(uint8_t reason)
+{
+    (void)endFailedPoll();
+    report(BMS_ERR_JK_FRAME_INVALID, reason);
 }
 
 static void sendRequest(uint32_t nowMs, uint8_t cmd)
@@ -80,7 +97,7 @@ static void sendRequest(uint32_t nowMs, uint8_t cmd)
     state = JK_SENDING;
     requestMs = nowMs;
     if (HAL_UART_Transmit_DMA(uart, request, JKP_REQUEST_LEN) != HAL_OK) {
-        onFailure(BMS_ERR_JK_COMMS_TIMEOUT, failCount);
+        onTimeout();                       /* the exchange never started */
     }
 }
 
@@ -144,32 +161,24 @@ void JK_Task(uint32_t nowMs)
                 setDirection(DE_IDLE, RE_LISTENING);
                 state = JK_IDLE;
             } else {
-                onFailure(BMS_ERR_JK_FRAME_INVALID, (uint8_t)(len & 0xFFu));
+                onFrameInvalid((uint8_t)(len & 0xFFu));
             }
         } else if ((uint32_t)(nowMs - requestMs) >= JK_TIMEOUT_MS) {
-            onFailure(BMS_ERR_JK_COMMS_TIMEOUT, failCount);
+            onTimeout();
         }
         return;
     }
 
     if (state == JK_SENDING) {
         if ((uint32_t)(nowMs - requestMs) >= JK_TIMEOUT_MS) {
-            /*
-             * TC may fire between the check above and here: JK_OnTxComplete
-             * (ISR) commits SENDING->RECEIVING and arms the RX DMA. Without
-             * this guard the plain write below would clobber that back to
-             * IDLE while an RX DMA is still live - corrupting the state
-             * machine. The CAS makes this task the sole writer of the
-             * SENDING->IDLE edge: it only fires if state is still SENDING at
-             * the instant of the write. If the ISR won the race, the CAS
-             * fails and this timeout is dropped - the exchange that was
-             * about to succeed is left alone, no interrupt is masked
-             * (spec S3.5), and JK_RECEIVING picks it up on the next call.
-             */
+            /* TC may fire mid-check and commit SENDING->RECEIVING with the RX
+               DMA armed. The CAS makes this task the sole writer of the
+               SENDING->IDLE edge; if the ISR won, the timeout is dropped and
+               JK_RECEIVING picks the exchange up. Spec 7.3. */
             JK_State_e expected = JK_SENDING;
             if (__atomic_compare_exchange_n(&state, &expected, JK_IDLE, false,
                                              __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
-                onFailure(BMS_ERR_JK_COMMS_TIMEOUT, failCount);
+                onTimeout();
             }
         }
         return;
