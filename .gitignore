@@ -122,3 +122,6 @@ Thumbs.db
 # cantools fork + its uv environment, bootstrapped on demand (see docs/canDatabase.md).
 # Deliberately not a submodule: it is a build-time tool, not a project dependency.
 /.claude/tmp/
+
+# STM32CubeIDE macOS project artefact
+/.osx.project
