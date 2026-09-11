@@ -26,6 +26,8 @@ CAN1 transmit schedule, fault reporting, LED annunciation.
 | Fan control (`PB1`) | No thermal design specifies what it cools or at what temperature. Pin stays low. |
 | HVIL (`PA7`) | Purpose unconfirmed. Configured as an input, otherwise unused and unreported. |
 | Independent watchdog | Deliberately deferred to avoid complexity; revisit later. |
+| `SafeState_SyncTick` (ID 30) | Not needed. The frame broadcasts a 32-bit ms counter every 10 s so other ECUs can align timestamps, but nothing asks BMS Master to timestamp anything. The CAN1 filter admits only IDs 1 and 3, so it is dropped. |
+| `PCBCells<x>_NODE` frames (210, 220 ... 270) | Not consumed. They carry each pack's own `Error_Code` and `Severity`, but a silent pack is already detected from thermistor absence (section 6.3), which is what this board needs. Consequence: a pack reporting its own fault while still sending thermistor data goes unnoticed here. |
 | CAN bus-off recovery | `AutoBusOff` stays `DISABLE` with no software recovery; deferred. |
 
 ## 2. Hardware baseline
@@ -71,8 +73,8 @@ CAN bit timing is **not** changed: it is a fleet-wide convention, matching
 | --- | --- | --- | --- |
 | `nCAN1_Stby` | PC11 | **LOW = normal operation** | Confirmed. The `n` prefix misleads; these drive an active-high `STB` input. |
 | `nCAN2_Stby` | PC10 | **LOW = normal operation** | Confirmed. Driving HIGH would put both transceivers in standby and kill all CAN. |
-| `RS_DIR` | PC4 | Assumed `DE`, active high | **ASSUMED** - see section 11 |
-| `RE_DIR` | PC5 | Assumed `/RE`, active low | **ASSUMED** - see section 11 |
+| `RS_DIR` | PC4 | `DE`, active high | Confirmed by Bartek, 2026-09-11 |
+| `RE_DIR` | PC5 | `/RE`, active low | Confirmed by Bartek, 2026-09-11 |
 
 Both standby pins are written LOW explicitly during CAN init, not left to the generated
 `MX_GPIO_Init` reset state, so correctness survives regeneration.
@@ -588,7 +590,7 @@ fault mask is non-zero.
 
 | Item | Status |
 | --- | --- |
-| `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **ASSUMED.** Inferred from the SN65HVD72 pinout and a boot state of both LOW = listen. Awaiting Bartek. Both levels are named constants; verify with a scope on PC4/PC5 before trusting the JK link. The same class of inference proved **wrong** for the CAN standby pins, so this carries real risk. |
+| `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
 | Error codes 3-9 | Allocated here; must be added to the team CSV registry. |
 | CAN-DATABASE PR #46 | Open. Bump the submodule and regenerate once merged. |
 | ADC calibration constants | `28.3626` divider and `2108` / `4` current values ship as named defines marked uncalibrated, and are corrected at bring-up step 3. |
