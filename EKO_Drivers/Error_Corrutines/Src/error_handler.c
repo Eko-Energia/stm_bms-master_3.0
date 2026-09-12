@@ -360,7 +360,9 @@ static void getData_HeightbeatOK(uint8_t *data, void *context)
 	data[1] = (uint8_t)((errorCode >> 8) & 0xFF);
 
 	// Byte 2: Flags
-	data[2] = ((halted & 0x01) << 0) | ((severity & 0x07) << 1);
+	// DBC BMSMaster_NODE: Reserved 16|4, Severity 20|3, Halted 23|1 - so within
+	// byte 2 that is reserved 0-3, severity 4-6, halted 7.
+	data[2] = (uint8_t)(((severity & 0x07) << 4) | ((halted & 0x01) << 7));
 
 	// Bytes 3-7: Zero
 	memset(&data[3], 0, 5);
@@ -385,7 +387,7 @@ static void getData_Error(uint8_t *data, void *context)
 	data[1] = (uint8_t)((errorToSend >> 8) & 0xFF);
 
 	// Byte 2: Flags
-	data[2] = ((hehandler->isHalted & 0x01) << 0) | ((sev & 0x07) << 1);
+	data[2] = (uint8_t)(((sev & 0x07) << 4) | ((hehandler->isHalted & 0x01) << 7));
 
 	// Bytes 3-7: Specific data
 	memcpy(&data[3], hehandler->activeErrors[idx].specificData, ERROR_SPECIFIC_DATA_SIZE);

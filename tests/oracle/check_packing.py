@@ -71,6 +71,12 @@ EXPECTED = {
     0x080: {                                    # BMSMaster_NODE: active fault reported
         "Error_Code": 10,                       # BMS_ERR_FATAL_INIT
         "Error_Specific_Data": 0x1234,
+        # Every signal in the frame, not a subset: a bit-layout mismatch put
+        # severity into Reserved and left Severity reading 0 (= SAFE_STATE) on
+        # real hardware, and a partial expectation set could not see it.
+        "Severity": 1,                          # ERROR_SEVERITY_ERROR
+        "Node_Execution_Halted": 0,
+        "Reserved": 0,
     },
     0x082: {                                    # BMSMaster_MasterVoltCurrTemp
         "BMSMaster_MasterBatteryVoltage": 73.1,
