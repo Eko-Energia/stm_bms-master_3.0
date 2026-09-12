@@ -81,14 +81,25 @@ static void timeout(uint32_t now)
     JK_Task(now + 150u);            /* past the 100 ms timeout */
 }
 
-TEST(the_first_exchange_sends_the_activation_command)
+/* Byte-for-byte the request esphome-jk-bms and jk-bms_grafana send, and the
+   only command Bartek's verified-working reader ever needed. 0x01 activation is
+   not sent: no working implementation uses it, and waiting for a reply the BMS
+   never owes deadlocked the link. */
+TEST(every_poll_is_a_read_all_and_matches_the_reference_implementations)
 {
     setup();
     Fake_SetTick(0u);
     JK_Task(0u);
     uint8_t sent[JKP_REQUEST_LEN];
     CHECK_EQ(Fake_LastUartTx(sent, sizeof sent), JKP_REQUEST_LEN);
-    CHECK_EQ(sent[8], JKP_CMD_ACTIVATE);
+
+    static const uint8_t expect[21] = {
+        0x4Eu, 0x57u, 0x00u, 0x13u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x06u, 0x03u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x68u, 0x00u, 0x00u, 0x01u, 0x29u
+    };
+    CHECK_EQ((int)JKP_REQUEST_LEN, 21);
+    for (uint8_t i = 0u; i < 21u; i++) { CHECK_EQ(sent[i], expect[i]); }
 }
 
 TEST(transmit_asserts_the_driver_and_mutes_the_receiver)
@@ -162,24 +173,40 @@ TEST(three_timeouts_raise_the_comms_fault_and_zero_the_data)
     CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
-TEST(a_timeout_retries_with_activation_first)
+/* Nothing gates the retry, so the link cannot deadlock however long it is down:
+   the same read goes out every poll and the first good frame restores it. */
+TEST(a_timeout_retries_the_same_read_and_never_gates_recovery)
 {
     setup();
     uint8_t reply[64];
     const uint16_t n = makeSocResponse(reply, 60u);
     exchange(0u, reply, n);
-    exchange(1000u, reply, n);
+    CHECK(JK_Valid());
 
-    Fake_SetTick(2000u);
-    JK_Task(2000u);
-    JK_OnTxComplete();
-    JK_Task(2150u);                               /* timeout */
+    timeout(1000u);
+    timeout(2000u);
+    timeout(3000u);                               /* past JK_FAIL_LIMIT: code 4 stands */
+    CHECK(!JK_Valid());
+    bool sawTimeout = false;
+    for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].errorCode == BMS_ERR_JK_COMMS_TIMEOUT) { sawTimeout = true; }
+    }
+    CHECK(sawTimeout);
 
     Fake_Reset();
-    JK_Task(3000u);
+    Fake_SetTick(4000u);
+    JK_Task(4000u);                               /* the retry goes out */
     uint8_t sent[JKP_REQUEST_LEN];
     Fake_LastUartTx(sent, sizeof sent);
-    CHECK_EQ(sent[8], JKP_CMD_ACTIVATE);          /* the BMS may have gone to sleep */
+    CHECK_EQ(sent[8], JKP_CMD_READ_ALL);          /* still the read, not a gate */
+
+    /* and answering that very poll is enough - no activation in between */
+    Fake_QueueUartRx(reply, n);
+    JK_OnTxComplete();
+    JK_OnRxEvent(n);
+    JK_Task(4000u);
+    CHECK(JK_Valid());
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 TEST(a_corrupt_response_raises_frame_invalid_not_timeout)
@@ -509,13 +536,13 @@ TEST(the_link_recovers_after_a_line_error)
 
 int main(void)
 {
-    RUN(the_first_exchange_sends_the_activation_command);
+    RUN(every_poll_is_a_read_all_and_matches_the_reference_implementations);
     RUN(transmit_asserts_the_driver_and_mutes_the_receiver);
     RUN(transmission_complete_turns_the_transceiver_around);
     RUN(a_valid_response_is_decoded_and_marks_the_link_up);
     RUN(polling_settles_to_read_all_at_one_hertz);
     RUN(three_timeouts_raise_the_comms_fault_and_zero_the_data);
-    RUN(a_timeout_retries_with_activation_first);
+    RUN(a_timeout_retries_the_same_read_and_never_gates_recovery);
     RUN(a_corrupt_response_raises_frame_invalid_not_timeout);
     RUN(a_response_arriving_just_after_the_deadline_is_ignored);
     RUN(an_unsolicited_frame_with_no_request_outstanding_does_not_corrupt_state);
