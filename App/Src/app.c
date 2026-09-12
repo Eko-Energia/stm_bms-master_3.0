@@ -97,7 +97,9 @@ static void initAll(void)
 
     /* CAN first: EH_init needs the scheduler, and faults are reportable from
        the next line onward. */
-    CAN_App_Init(&hcan1, &hcan2, &eh);
+    /* Before EH_init, so a failure here cannot be reported as a fault:
+       escalate instead, or the board runs with a dead bus and says nothing. */
+    if (!CAN_App_Init(&hcan1, &hcan2, &eh)) { Error_Handler(); }
     EH_init(&eh, &hcan1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
 
     /* A hand edit at bring-up that breaks the NTC table's strict ordering

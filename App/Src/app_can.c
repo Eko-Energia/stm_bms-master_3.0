@@ -27,7 +27,8 @@ _Static_assert(CAN2_FILTER_BANK_BASE == CAN_SLAVE_START_FILTER_BANK,
 static struct CAN_scheduledMsgList scheduler;
 static CAN_HandleTypeDef *can1;
 static EH_HandleTypeDef  *ehandler;
-static uint32_t txFailId;        /* frame currently reported as blocked, 0 = none */
+static uint32_t txFailId;
+static bool     initOk;        /* frame currently reported as blocked, 0 = none */
 
 /* Persistent frame structs: getData packs from these, so nothing is stale. */
 static struct BMSMaster_MasterVoltCurrTemp_t frameMeas;
@@ -118,14 +119,16 @@ static void add(uint32_t id, uint8_t dlc, uint32_t periodMs,
     msg.periodMs     = periodMs;
     msg.getData      = fn;
     msg.context       = ctx;
-    if (CAN_AddScheduledMsg(&msg, &scheduler) != HAL_OK && ehandler != NULL) {
-        const uint8_t blob[5] = { (uint8_t)(id & 0xFFu), (uint8_t)((id >> 8) & 0xFFu), 0u, 0u, 0u };
-        EH_reportEx(ehandler, BMS_ERR_CAN1_TX_FAIL, ERROR_SEVERITY_WARNING, blob, 2u);
+    if (CAN_AddScheduledMsg(&msg, &scheduler) != HAL_OK) {
+        /* EH_init runs after this, so a report here would be dropped. Fail the
+           init instead and let the caller escalate. */
+        initOk = false;
     }
 }
 
-void CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleTypeDef *eh)
+bool CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleTypeDef *eh)
 {
+    initOk = true;
     can1 = hcan1;
     ehandler = eh;
     txFailId = 0u;
@@ -139,13 +142,13 @@ void CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleT
     /* Filters before CAN_Init: NART is only writable before HAL_CAN_Start. */
     const uint16_t safeStateIds[4] = { SAFESTATE_ACTIV_ID, SAFESTATE_NODE_ID,
                                        SAFESTATE_ACTIV_ID, SAFESTATE_ACTIV_ID };
-    (void)CAN_ConfigFilterList16(hcan1, CAN1_FILTER_BANK, safeStateIds);
+    initOk = initOk && (CAN_ConfigFilterList16(hcan1, CAN1_FILTER_BANK, safeStateIds) == HAL_OK);
     for (uint8_t k = 0u; k < 5u; k++) {
-        (void)CAN_ConfigFilterMask32(hcan2, (uint8_t)(CAN2_FILTER_BANK_BASE + k),
-                                     (uint16_t)(0x0D0u + (k * 0x010u)), CAN2_FILTER_MASK);
+        initOk = initOk && (CAN_ConfigFilterMask32(hcan2, (uint8_t)(CAN2_FILTER_BANK_BASE + k),
+                                          (uint16_t)(0x0D0u + (k * 0x010u)), CAN2_FILTER_MASK) == HAL_OK);
     }
-    (void)CAN_Init(hcan1);
-    (void)CAN_Init(hcan2);
+    initOk = initOk && (CAN_Init(hcan1) == HAL_OK);
+    initOk = initOk && (CAN_Init(hcan2) == HAL_OK);
 
     add(BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID, BMSMASTER_MASTERVOLTCURRTEMP_LENGTH,
         BMSMASTER_MASTERVOLTCURRTEMP_CYCLE_TIME_MS, getMeasurements, NULL);
@@ -176,6 +179,8 @@ void CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleT
     /* END has no signals defined; honour the cycle time with 8 zero bytes.
        A NULL getData leaves the scheduler's zeroed buffer untouched. */
     add(BMSMASTER_END_FRAME_ID, BMSMASTER_END_LENGTH, BMSMASTER_END_CYCLE_TIME_MS, NULL, NULL);
+
+    return initOk;
 }
 
 /*

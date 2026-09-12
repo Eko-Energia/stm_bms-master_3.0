@@ -146,6 +146,7 @@ void     Fake_SetCompare(TIM_HandleTypeDef *h, uint32_t ch, uint32_t v);
 void     Fake_QueueUartRx(const uint8_t *data, uint16_t len);
 uint16_t Fake_LastUartTx(uint8_t *out, uint16_t cap);
 void     Fake_ForceUartTxFail(void);
+void     Fake_ForceCanStartFail(void);   /* next HAL_CAN_Start returns HAL_ERROR */
 /* Queues a received frame, dropped immediately if no configured filter bank
    owned by h accepts stdId - this is what models hardware filtering. */
 void     Fake_QueueCanRx(CAN_HandleTypeDef *h, uint32_t stdId, const uint8_t *data, uint8_t dlc);

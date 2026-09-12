@@ -1,5 +1,6 @@
 #include "test_runner.h"
 #include "app_thermal.h"
+#include "app_therm.h"
 #include "bms_errors.h"
 #include "error_handler.h"
 #include "CAN_DB.h"
@@ -86,6 +87,37 @@ TEST(pack_overtemperature_names_the_thermistor)
     CHECK_EQ(eh.activeErrors[0].specificData[2], 160u);
 }
 
+TEST(the_bench_capture_raises_can2_temp_high)
+{
+    Fake_Reset();
+    memset(&eh, 0, sizeof eh); memset(&sched, 0, sizeof sched);
+    EH_init(&eh, &hcan, BMSMASTER_NODE_FRAME_ID, &sched);
+    THERM_Init(&eh); THERMAL_Init(&eh);
+
+    /* His readings: most sensors 171 (67.06 C), some unfitted at 0. */
+    for (int pass = 0; pass < 12; pass++) {
+        for (uint8_t m = 1; m <= 7; m++)
+            for (uint8_t t = 1; t <= 9; t++) {
+                const uint8_t raw = ((m + t) % 3 == 0) ? 0u : 171u;  /* scattered zeros */
+                if (raw != 0u) THERM_OnFrame(210u + (m - 1u) * 10u + ((m & 1u) ? t : (10u - t)), raw);
+            }
+        THERM_Task();
+    }
+    printf("    THERM_MaxRaw() = %u  (threshold is 153)\n", THERM_MaxRaw());
+    CHECK(THERM_MaxRaw() > 153u);
+
+    THERMAL_Evaluate(true, 2521u, THERM_MaxRaw(), THERM_MaxModule(), THERM_MaxTherm());
+    /* The scattered unfitted sensors raise CAN2_MODULE_SILENT as well, so assert
+       membership: the bench capture has both faults active at once. */
+    bool tempHigh = false, moduleSilent = false;
+    for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].errorCode == BMS_ERR_CAN2_TEMP_HIGH)     { tempHigh = true; }
+        if (eh.activeErrors[i].errorCode == BMS_ERR_CAN2_MODULE_SILENT) { moduleSilent = true; }
+    }
+    CHECK(tempHigh);
+    CHECK(moduleSilent);
+}
+
 int main(void)
 {
     RUN(healthy_temperatures_raise_nothing);
@@ -94,5 +126,6 @@ int main(void)
     RUN(pack_overtemperature_uses_the_hottest_thermistor);
     RUN(the_two_sensors_are_reported_independently);
     RUN(pack_overtemperature_names_the_thermistor);
+    RUN(the_bench_capture_raises_can2_temp_high);
     return TEST_SUMMARY();
 }

@@ -1,6 +1,7 @@
 #ifndef APP_CAN_H
 #define APP_CAN_H
 #include "can_driver.h"
+#include <stdbool.h>
 #include "error_handler.h"
 
 /**
@@ -8,7 +9,9 @@
  *        Leaves frame 128 to EH_init, which registers it itself.
  *        Drives both transceivers out of standby before starting either bus.
  */
-void CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleTypeDef *eh);
+/** @brief Bring up both buses. False if a filter or a controller failed:
+    EH is not up yet here, so the caller must escalate. */
+bool CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleTypeDef *eh);
 
 /** @brief Service the CAN1 transmit scheduler. Call last in the loop. */
 void CAN_App_Task(void);

@@ -24,6 +24,7 @@ static uint32_t capturedValue[16];
 static uint32_t compareValue[16];
 static HAL_TIM_ChannelStateTypeDef channelState[16];
 static uint8_t  uartTxFail;
+static uint8_t  canStartFail;
 
 /* Decoded bxCAN filter banks, keyed by bank index and owning hcan - enough to
    reproduce hardware admit/reject behaviour for Fake_QueueCanRx. */
@@ -59,7 +60,7 @@ void Fake_Reset(void)
 {
     fakeTick = 0; txCount = 0; lastCompare = 0;
     uartTxLen = 0; uartRxQueuedLen = 0; uartRxDest = NULL; uartRxCap = 0;
-    uartTxFail = 0;
+    uartTxFail = 0; canStartFail = 0;
     rxHead = 0; rxTail = 0;
     canTxHold = 0; canAbortCount = 0;
     memset(txUnit, 0, sizeof txUnit);
@@ -198,7 +199,12 @@ HAL_StatusTypeDef HAL_CAN_GetRxMessage(CAN_HandleTypeDef *h, uint32_t fifo,
     return HAL_ERROR;
 }
 
-HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *h) { UNUSED(h); return HAL_OK; }
+HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *h)
+{
+    UNUSED(h);
+    if (canStartFail) { canStartFail = 0; return HAL_ERROR; }
+    return HAL_OK;
+}
 HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef *h, uint32_t it) { UNUSED(h); UNUSED(it); return HAL_OK; }
 /* CAN1 and CAN2 have their own mailboxes; bind a unit to each handle on first
    use so one peripheral's traffic cannot block the other. */
@@ -279,6 +285,7 @@ uint32_t Fake_TxCountFor(uint32_t stdId)
 }
 
 void Fake_ForceUartTxFail(void) { uartTxFail = 1; }
+void Fake_ForceCanStartFail(void) { canStartFail = 1; }
 
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n)
 {
