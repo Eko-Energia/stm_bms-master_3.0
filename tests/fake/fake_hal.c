@@ -56,9 +56,13 @@ static struct {
 static uint8_t  canTxHold;        /* mailboxes never free: an unacknowledged frame */
 static uint32_t canAbortCount;
 
+static uint32_t uartErrBits;
+static uint32_t uartAbortCount;
+
 void Fake_Reset(void)
 {
     fakeTick = 0; txCount = 0; lastCompare = 0;
+    uartErrBits = 0; uartAbortCount = 0;
     uartTxLen = 0; uartRxQueuedLen = 0; uartRxDest = NULL; uartRxCap = 0;
     uartTxFail = 0; canStartFail = 0;
     rxHead = 0; rxTail = 0;
@@ -301,6 +305,11 @@ uint16_t Fake_LastUartTx(uint8_t *out, uint16_t cap)
     memcpy(out, uartTx, n);
     return n;
 }
+HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { UNUSED(h); uartAbortCount++; return HAL_OK; }
+uint32_t HAL_UART_GetError(UART_HandleTypeDef *h) { UNUSED(h); return uartErrBits; }
+void     Fake_SetUartError(uint32_t bits) { uartErrBits = bits; }
+uint32_t Fake_UartAbortCount(void) { return uartAbortCount; }
+
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n)
 {
     UNUSED(h);

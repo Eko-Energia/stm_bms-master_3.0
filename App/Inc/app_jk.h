@@ -17,6 +17,11 @@ void JK_OnTxComplete(void);
 /** @brief From HAL_UARTEx_RxEventCallback. ISR context. */
 void JK_OnRxEvent(uint16_t size);
 
+/** @brief From HAL_UART_ErrorCallback. ISR context: latches only. A line error
+ *         aborts the DMA reception, so the receive must be re-armed or the link
+ *         stays deaf. Pass HAL_UART_GetError(). */
+void JK_OnUartError(uint32_t errorBits);
+
 bool JK_Valid(void);
 const JK_Data_t *JK_Data(void);
 

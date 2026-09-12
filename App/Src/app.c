@@ -52,6 +52,11 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     if (huart == &huart1) { JK_OnTxComplete(); }
 }
 
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == &huart1) { JK_OnUartError(HAL_UART_GetError(huart)); }
+}
+
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
     if (huart == &huart1) { JK_OnRxEvent(size); }

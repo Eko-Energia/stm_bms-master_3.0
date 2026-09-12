@@ -37,11 +37,27 @@ static uint8_t  rxBuf[JKP_RX_BUF_LEN];
    reading rxLen - so no store from either side is ever half-read. */
 static volatile uint16_t rxLen;
 static volatile uint8_t  rxReady;
+static volatile uint8_t  lineErrBits;
+static volatile uint8_t  lineErrPending;
 
 static void setDirection(GPIO_PinState de, GPIO_PinState re)
 {
     HAL_GPIO_WritePin(RS_DIR_GPIO_Port, RS_DIR_Pin, de);
     HAL_GPIO_WritePin(RE_DIR_GPIO_Port, RE_DIR_Pin, re);
+}
+
+/* Code 5's second payload byte: a short frame and a wiring fault are both
+   "invalid frame", and the reason byte alone cannot separate them because a
+   length occupies the whole 0-255 range. */
+#define JK_REASON_FRAME   (0u)   /* detail = received length */
+#define JK_REASON_LINE    (1u)   /* detail = USART error bits: PE 1, NE 2, FE 4, ORE 8 */
+
+static void reportFrameInvalid(uint8_t detail, uint8_t kind)
+{
+    if (ehandler != NULL) {
+        const uint8_t blob[5] = { detail, kind, 0u, 0u, 0u };
+        EH_reportEx(ehandler, BMS_ERR_JK_FRAME_INVALID, ERROR_SEVERITY_WARNING, blob, 2u);
+    }
 }
 
 static void report(uint16_t code, uint8_t detail)
@@ -84,7 +100,7 @@ static void onTimeout(void)
 static void onFrameInvalid(uint8_t reason)
 {
     (void)endFailedPoll();
-    report(BMS_ERR_JK_FRAME_INVALID, reason);
+    reportFrameInvalid(reason, JK_REASON_FRAME);
 }
 
 static void sendRequest(uint32_t nowMs, uint8_t cmd)
@@ -114,6 +130,8 @@ void JK_Init(UART_HandleTypeDef *huart, EH_HandleTypeDef *eh)
     pendingCmd = JKP_CMD_READ_ALL;
     rxReady = 0u;
     rxLen = 0u;
+    lineErrPending = 0u;
+    lineErrBits = 0u;
     memset(&data, 0, sizeof data);
     setDirection(DE_IDLE, RE_LISTENING);
 }
@@ -124,6 +142,16 @@ void JK_OnTxComplete(void)
     setDirection(DE_IDLE, RE_LISTENING);
     state = JK_RECEIVING;
     (void)HAL_UARTEx_ReceiveToIdle_DMA(uart, rxBuf, JKP_RX_BUF_LEN);
+}
+
+/* ISR context, so this latches and returns: EH_reportEx walks the scheduler and
+   must not run against the superloop. JK_Task consumes it. */
+void JK_OnUartError(uint32_t errorBits)
+{
+    if (uart == NULL) { return; }
+    (void)HAL_UART_AbortReceive(uart);
+    lineErrBits = (uint8_t)(errorBits & 0xFFu);
+    lineErrPending = 1u;
 }
 
 void JK_OnRxEvent(uint16_t size)
@@ -137,6 +165,16 @@ void JK_OnRxEvent(uint16_t size)
 void JK_Task(uint32_t nowMs)
 {
     if (uart == NULL) { return; }
+
+    if (lineErrPending != 0u) {
+        lineErrPending = 0u;
+        const uint8_t bits = lineErrBits;
+        /* Outside an exchange the abort is enough; the next poll re-arms. */
+        if (state == JK_RECEIVING) {
+            (void)endFailedPoll();
+            reportFrameInvalid(bits, JK_REASON_LINE);
+        }
+    }
 
     if (state == JK_RECEIVING) {
         if (rxReady != 0u) {

@@ -439,6 +439,74 @@ TEST(a_frame_error_does_not_re_arm_activation)
     CHECK_EQ(sent[8], JKP_CMD_READ_ALL);
 }
 
+/* A USART line error - framing, noise, overrun - aborts the DMA reception. The
+   module must re-arm and say WHICH kind of failure it was, or a broken wire is
+   indistinguishable from a silent BMS. */
+static void lineError(uint32_t now, uint32_t bits)
+{
+    Fake_SetTick(now);
+    JK_Task(now);                   /* the poll goes out */
+    JK_OnTxComplete();              /* receiver armed */
+    Fake_SetUartError(bits);
+    JK_OnUartError(bits);           /* HAL_UART_ErrorCallback would call this */
+    JK_Task(now);
+}
+
+TEST(a_line_error_is_reported_as_a_line_error_not_a_short_frame)
+{
+    setup();
+    const uint32_t before = Fake_UartAbortCount();
+    lineError(0u, 0x04u);                       /* HAL_UART_ERROR_FE */
+
+    CHECK(Fake_UartAbortCount() > before);      /* the dead DMA was torn down */
+    CHECK_EQ(EH_getActiveCount(&eh), 1u);
+    const EH_ActiveError *e = &eh.activeErrors[0];
+    CHECK_EQ(e->errorCode, BMS_ERR_JK_FRAME_INVALID);
+    CHECK_EQ(e->severity, ERROR_SEVERITY_WARNING);
+    CHECK_EQ(e->specificDataLen, 2u);
+    CHECK_EQ(e->specificData[0], 0x04u);        /* the USART error bits */
+    CHECK_EQ(e->specificData[1], 1u);           /* kind 1 = line, not a frame length */
+}
+
+TEST(a_short_frame_still_reports_as_a_frame_not_a_line_error)
+{
+    setup();
+    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
+    uint8_t reply[64]; uint16_t n = makeSocResponse(reply, 60u);
+    exchange(0u, ack, a);
+    reply[n - 1u] ^= 0xFFu;                     /* break the checksum */
+    exchange(1000u, reply, n);
+
+    const EH_ActiveError *e = &eh.activeErrors[0];
+    CHECK_EQ(e->errorCode, BMS_ERR_JK_FRAME_INVALID);
+    CHECK_EQ(e->specificDataLen, 2u);
+    CHECK_EQ(e->specificData[1], 0u);           /* kind 0 = frame length */
+}
+
+TEST(a_line_error_outside_an_exchange_is_absorbed_silently)
+{
+    setup();
+    /* Noise on an idle bus must not manufacture a fault. */
+    Fake_SetUartError(0x04u);
+    JK_OnUartError(0x04u);
+    JK_Task(0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
+}
+
+TEST(the_link_recovers_after_a_line_error)
+{
+    setup();
+    lineError(0u, 0x04u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
+
+    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
+    uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 60u);
+    exchange(1000u, ack, a);
+    exchange(2000u, reply, n);
+    CHECK(JK_Valid());                          /* a good frame clears it */
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
+}
+
 int main(void)
 {
     RUN(the_first_exchange_sends_the_activation_command);
@@ -456,6 +524,10 @@ int main(void)
     RUN(a_failed_transmit_start_is_reported_and_counted);
     RUN(an_activation_reply_is_never_published_as_data);
     RUN(frame_invalid_is_graded_warning_and_a_timeout_error);
+    RUN(a_line_error_is_reported_as_a_line_error_not_a_short_frame);
+    RUN(a_short_frame_still_reports_as_a_frame_not_a_line_error);
+    RUN(a_line_error_outside_an_exchange_is_absorbed_silently);
+    RUN(the_link_recovers_after_a_line_error);
     RUN(one_dropped_poll_is_not_a_bus_fault);
     RUN(the_comms_fault_reports_the_post_increment_failure_count);
     RUN(a_frame_error_does_not_re_arm_activation);

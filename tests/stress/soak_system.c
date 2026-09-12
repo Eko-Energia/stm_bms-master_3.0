@@ -372,6 +372,10 @@ HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, const uint8_t *d,
     return HAL_OK;
 }
 
+static uint32_t soakUartErr;
+HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { (void)h; return HAL_OK; }
+uint32_t HAL_UART_GetError(UART_HandleTypeDef *h) { (void)h; return soakUartErr; }
+
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n)
 {
     UNUSED(h);

@@ -100,6 +100,10 @@ HAL_StatusTypeDef HAL_CAN_GetRxMessage(CAN_HandleTypeDef *h, uint32_t fifo,
                                        CAN_RxHeaderTypeDef *hdr, uint8_t *data);
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n);
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n);
+HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h);
+uint32_t          HAL_UART_GetError(UART_HandleTypeDef *h);
+void              Fake_SetUartError(uint32_t bits);
+uint32_t          Fake_UartAbortCount(void);
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *h, uint16_t size);
 HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *h, uint32_t ch);
 HAL_StatusTypeDef HAL_TIM_IC_ConfigChannel(TIM_HandleTypeDef *h, TIM_IC_InitTypeDef *cfg, uint32_t ch);
