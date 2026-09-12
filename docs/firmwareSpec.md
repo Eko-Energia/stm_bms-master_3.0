@@ -867,6 +867,12 @@ behaviour rather than forking a third one. One error goes out per transmission, 
 N * 5000 ms to cycle - 15 s for three, 80 s for sixteen. That latency is accepted: the frame is a
 status report. Contactor opening and safe state act on their own paths and do not wait for it.
 
+A fault rides the next already-scheduled node frame; reporting one neither restarts nor advances
+the slot, so it reaches the bus 0-5000 ms later. **Every fault is transmitted at least once**: one
+cleared before its slot is held until it has been sent, then dropped. `EH_getActiveCount()` counts
+only genuinely active faults and is what the red LED follows, so a held fault does not keep the
+light on after the condition has gone.
+
 `SAFE_STATE_FRAME_ID (0x000)` in `error_handler.h` is **dead** - referenced nowhere in
 `error_handler.c`, and `EH_triggerSafeState()` reports a severity-0 error on the node's own
 frame rather than transmitting a dedicated one. Safe state is the *severity field*, not a frame
@@ -924,7 +930,7 @@ that exclusion.
 | Error code 12 | Allocated here; still to be added to the team CSV registry. |
 | PCBCells thermistor encoder bias | **Deferred.** `stm_PCB-Cells` PR #13 closed unmerged, branch `fix/therm-encoding-offset` kept. `THERM_LEGACY_DEBIAS` is therefore the operating state, not a stopgap - see section 6.0. |
 | CAN-DATABASE PR #46, #49 | **Both merged.** Submodule pins `master` (`323b037`); regenerated. #49 declares the CAN2 `-49` thermistor offset, which `THERM_LEGACY_DEBIAS` undoes in firmware - see section 6.0. |
-| Three driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. (3) `updateTransmissionInterval` scaled the node frame down to 100 ms as faults accumulated, overriding `setNodeFrameSource`; now fixed at `ERROR_INTERVAL`. All verified by the soak. |
+| Three driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. (3) `updateTransmissionInterval` scaled the node frame down to 100 ms as faults accumulated, overriding `setNodeFrameSource`; now fixed at `ERROR_INTERVAL`. (4) A fault raised and cleared inside one period was never transmitted; `EH_ActiveError` now carries `sent`/`pendingClear` so it is held for one send, with `EH_getActiveCount()` added to separate health from queue length. All verified by the soak. |
 | ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
 | Current sensor calibration is for the wrong part | The fitted sensor is a Tamura **L01Z300S05**, +/-300 A, 5 V ratiometric, `Vcc/2` at 0 A. The `2108` offset and 4 counts/A reference fit a **+/-150 A part read against a 5 V reference**; this MCU's reference is 3.3 V. Unmeasurable while the sensor is unplugged - it simply clamps - but once connected it either invents current or hides it. One zero-current ADC read on PC1 decides which: `~2108` means a divider is fitted and only the gain is wrong, `~3102` means both are. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
