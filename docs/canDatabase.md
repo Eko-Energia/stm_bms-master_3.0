@@ -81,11 +81,13 @@ and `EKO_Drivers/CAN/Src/` (`CAN_DB.c`, `CAN2_DB.c`), alongside the hand-written
 ([can.md](can.md)) — the generated files are the frame layer that sits on top of it. Never
 hand-edit them; regenerate from the database instead.
 
-The committed sources are generated from `master` of `docs/CAN-DATABASE` (commit `60ab52e`).
-[CAN-DATABASE PR #46](https://github.com/Eko-Energia/CAN-DATABASE/pull/46), which added the six
-contiguous JK cell frames for the 21S pack, is merged. Regenerating after the bump produced no
-content change - only the generator's version/timestamp banner moved - confirming the merged
-`master` and the old `BMSMaster/21-cells` branch agree for this node.
+The committed sources are generated from `master` of `docs/CAN-DATABASE` (commit `323b037`),
+which merged [PR #49](https://github.com/Eko-Energia/CAN-DATABASE/pull/49): every CAN2
+thermistor signal moved from `(0.39216, 0)` to `(0.39216, -49)`, and three signals were renamed
+to the `_Temperature` convention. `CAN2_DB` therefore changed in 284 lines - offsets, ranges and
+the three renamed accessors - while `CAN_DB` moved only its banner. No `*_FRAME_ID` changed,
+which is the only part of the generated CAN2 surface this firmware uses, so nothing broke at a
+call site.
 
 Useful flags: `--bit-fields` to minimise struct sizes, `--use-float` for single-precision
 scaling, `--no-floating-point-numbers` to keep the generated code integer-only. Run

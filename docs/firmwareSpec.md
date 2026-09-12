@@ -394,13 +394,32 @@ Values outside the DBC range (63-87 V, +/-300 A, 0-100 degC) are detected with t
 
 ## 6. Pack thermistor path
 
-Seven `PCBCells` nodes each report nine thermistors on CAN2 at **1 Hz**, and the board
-re-publishes them on CAN1 at 1 Hz. The output is a **transpose, not a spatial average**:
-`BMSMaster_PCBsTherm<y>Temp` carries thermistor *y* from all seven packs.
+Seven `PCBCells` nodes each report nine thermistors on CAN2 every **200 ms**
+(`PCBCELLS_CAN_THERM_PERIOD`), and the board re-publishes them on CAN1 at 1 Hz. `THERM_Task`
+samples at 1 Hz, so four of every five frames are discarded rather than averaged. The output is
+a **transpose, not a spatial average**: `BMSMaster_PCBsTherm<y>Temp` carries thermistor *y* from
+all seven modules.
 
-Input and output encodings are byte-identical (`u8 x 0.39216 degC` over `[0..100]`), so
-**aggregation happens in raw counts** and there is no degC domain, which removes a whole
-quantisation step.
+The CAN1 encoding is `u8 x 0.39216 degC` over `[0..100]`, so **aggregation happens in raw
+counts** and there is no degC domain, which removes a whole quantisation step.
+
+### 6.0 The legacy input bias
+
+CAN2 input is **not** currently byte-identical to that. PCBCells firmware from
+[47a1036](https://github.com/Eko-Energia/stm_PCB-Cells) sends `(degC + 49) / 0.39216` and casts
+to `uint8_t` without clamping, so readings above 51 degC wrap: 60 degC arrives as 8.2 degC, and
+100 degC as 48.2 degC - the same byte an open sensor produces. CAN2_DB declares the bias as
+offset `-49`; it cannot express the wrap.
+
+`CAN_App_OnRx2` reverses both before `THERM_OnFrame`, so the window, the threshold and CAN1 all
+see the unbiased encoding. The de-bias is lossless: all 256 wire values map back to within one
+count of what a corrected board would send. Only a wrap can land in `0..123`, since `0..51 degC`
+leaves a legacy board as `124..255`.
+
+This is a stopgap. Clear `THERM_LEGACY_DEBIAS` in the same change that flashes
+[stm_PCB-Cells#13](https://github.com/Eko-Energia/stm_PCB-Cells/pull/13); the encodings overlap,
+so nothing detects a mismatch at runtime. It fails loud, though - a board flashed early trips
+over-temperature on its module within three seconds.
 
 ### 6.1 Frame identification
 
@@ -622,9 +641,10 @@ rest:
 | 147 | `BMSMaster_JK_Temp` (moved from 144) |
 | 148 | `BMSMaster_JK_CycleStats` (moved from 145) |
 
-PR #46 is **merged**. The submodule now pins `master` (`60ab52e`) and the sources were
-regenerated: the output is byte-identical apart from the generator's banner, confirming the
-merged `master` and the branch agree for this node.
+PR #46 is **merged**, and so is [PR #49](https://github.com/Eko-Energia/CAN-DATABASE/pull/49),
+which declared the CAN2 thermistor encoder bias. The submodule pins `master` (`323b037`) and the
+sources were regenerated. `CAN_DB` moved only its banner; `CAN2_DB` picked up the `-49` offset
+and three renamed signals without touching a single frame id.
 
 A JK-reported count **above** 21 raises a fault, since those cells would be invisible to the
 vehicle. A count **below** 21 is accepted, and the absent cells publish **0 mV** - confirmed as
@@ -869,7 +889,7 @@ that exclusion.
 | --- | --- |
 | `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
 | Error codes 3-10 | Allocated here; must be added to the team CSV registry. |
-| CAN-DATABASE PR #46 | **Merged.** Submodule pinned to `master` (`60ab52e`); regenerated with no content diff. |
+| CAN-DATABASE PR #46, #49 | **Both merged.** Submodule pins `master` (`323b037`); regenerated. #49 declares the CAN2 `-49` thermistor offset, which `THERM_LEGACY_DEBIAS` undoes in firmware - see section 6.0. |
 | Two driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. Both now verified by the soak. |
 | ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
