@@ -158,9 +158,11 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
 
     const uint16_t payloadEnd = (uint16_t)(len - 9u);   /* record number starts here */
     uint16_t i = JKP_PAYLOAD_START;
+    uint16_t tlvCount = 0u;
 
     while (i < payloadEnd) {
         const uint8_t ident = buf[i];
+        tlvCount++;
 
         if (ident == 0x79u) {                    /* length-prefixed cell block */
             if ((uint16_t)(i + 2u) > payloadEnd) { return false; }
@@ -261,6 +263,12 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
         if (soh > JKP_SOH_MAX_PCT) { return false; }
         d.soh = (uint8_t)((soh > 100u) ? 100u : soh);
     }
+
+    /* A frame can be structurally perfect and carry no data at all: every field
+       above is conditional, so it would decode all-zero and publish 0 % SOC with
+       21 cells at 0 mV as a valid reading - indistinguishable from a dead pack.
+       An empty payload is not a measurement. */
+    if (tlvCount == 0u) { return false; }
 
     *out = d;
     return true;
