@@ -472,6 +472,32 @@ staleness must be reported out of band.
 `CAN2_TEMP_HIGH` at **60 degC** with a few degrees of clearing hysteresis, carrying pack index,
 thermistor index and raw count.
 
+### 6.5 Saturated thermistors
+
+The PCBCells lookup clamps to its own table: `Rt >= 27515 ohm` returns 0 degC and `Rt <= 983 ohm`
+returns 100 degC. Both ends therefore mean *the sensor is at or past what can be measured*, and
+on a pack whose other sensors read room temperature that is an open or shorted thermistor rather
+than a reading. The two ends are not symmetric:
+
+| end | de-biased | on a direct CAN2 trace | behaviour |
+| --- | --- | --- | --- |
+| floor | `0` | `-0.37 degC` (wire 124) | **fails dangerous** - a dead sensor reads cold for ever, so that cell has no thermal protection |
+| ceiling | `254` | `-0.76 degC` (wire 123) | fails safe - raises code 2, whether the cause is a short or a real event |
+
+`THERM_Task` counts thermistors pinned at either end and raises code 12 against the worst one.
+The gate is `thermMiss == 0`, so a module that has never transmitted stays code 3 and its
+all-zero windows are not mistaken for nine floored sensors.
+
+Nothing is suppressed. A ceiling still raises code 2, because the byte cannot tell a short from a
+genuine 100 degC cell - that aliasing is what
+[stm_PCB-Cells#13](https://github.com/Eko-Energia/stm_PCB-Cells/pull/13) removes. Code 12 adds the
+half that was missing: the floor stops being invisible, and code 2 gains the context that its
+sensor is saturated.
+
+The proper fix is upstream. The PCBCells should report out-of-range distinctly instead of
+clamping, ideally over the `PCBCells<x>_NODE` frames, which are already defined in `CAN2_DB.dbc`
+with 40 bits of `Error_Specific_Data` and are never transmitted.
+
 ## 7. JK BMS link
 
 Half-duplex RS485 on USART1 via an SN65HVD72, 115200 8N1. Protocol V2.5
@@ -787,9 +813,15 @@ The runtime one is edge-triggered on the blocked frame's ID, so ordinary burst c
 clears within a pass - never reports.
 | 10 | `BMS_ERR_FATAL_INIT` | error | none used |
 | 11 | `ADC_STALLED` | error | ms since the last completed ADC scan `u16` |
+| 12 | `CAN2_THERM_SATURATED` | warning | module `u8`, thermistor `u8`, end `u8` (0 floor, 1 ceiling), count `u8` |
 
-Codes 1 and 2 come from the team's CSV registry; 3-11 are allocated here and must be added to
-it. The codes live in one header of constants, `App/Inc/bms_errors.h` - not a module. Each
+Code 12 fires when a thermistor that **is** transmitting sits at either end of the PCBCells
+lookup - see section 6.5. It never suppresses code 2: a ceiling reading still raises
+over-temperature, because the byte cannot distinguish a shorted sensor from a genuine 100 degC
+cell. The ceiling is reported in preference to a floor for the same reason.
+
+Codes 1 and 2 come from the team's CSV registry; 3-11 were allocated here and have since been
+added to it, and 12 still needs adding. The codes live in one header of constants, `App/Inc/bms_errors.h` - not a module. Each
 module reports its own faults via `EH_reportEx(&eh, code, severity, data, len)` and clears them
 with `EH_clear()`, so thresholds sit next to the values they judge.
 
@@ -888,7 +920,7 @@ that exclusion.
 | Item | Status |
 | --- | --- |
 | `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
-| Error codes 3-10 | Allocated here; must be added to the team CSV registry. |
+| Error codes 3-11 | **Done.** Allocated here and added to the team CSV registry. |
 | CAN-DATABASE PR #46, #49 | **Both merged.** Submodule pins `master` (`323b037`); regenerated. #49 declares the CAN2 `-49` thermistor offset, which `THERM_LEGACY_DEBIAS` undoes in firmware - see section 6.0. |
 | Two driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. Both now verified by the soak. |
 | ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
