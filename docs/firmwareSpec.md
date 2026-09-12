@@ -544,6 +544,13 @@ this module and the TLV walk reappears inside the transport, tangled with DMA st
 
 ### 7.3 Transport
 
+A USART line error - framing, noise, overrun - aborts the DMA reception, so
+`HAL_UART_ErrorCallback` must re-arm it or the link stays deaf. The callback
+latches the error bits and returns; `JK_Task` consumes them, because
+`EH_reportEx` walks the scheduler and must not run against the superloop. Code 5
+then carries kind 1 with the USART bits, separating a broken wire from a short
+frame - a length alone cannot, since it spans the whole 0-255 range.
+
 Non-blocking state machine, so the CAN scheduler keeps exact cadence:
 
 ```
@@ -802,7 +809,7 @@ value.
 | 2 | `CAN2_TEMP_HIGH` | error | pack `u8`, thermistor `u8`, raw count `u8` |
 | 3 | `CAN2_MODULE_SILENT` | error | bitmap of silent modules `u8` |
 | 4 | `JK_COMMS_TIMEOUT` | error | consecutive failures `u8` |
-| 5 | `JK_FRAME_INVALID` | warning | reason code `u8` |
+| 5 | `JK_FRAME_INVALID` | warning | detail `u8`, kind `u8` (0 = received length, 1 = USART error bits) |
 | 6 | `PACK_VOLT_RANGE` | error | decivolts `u16` |
 | 7 | `PACK_CURRENT_HIGH` | error | deciamps `i16` |
 | 8 | `TEMP_SENSOR_FAULT` | error | raw count `u16` |
