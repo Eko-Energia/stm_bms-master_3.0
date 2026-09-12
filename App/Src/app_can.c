@@ -24,18 +24,6 @@
 _Static_assert(CAN2_FILTER_BANK_BASE == CAN_SLAVE_START_FILTER_BANK,
                "CAN2 filters must start at the slave filter boundary");
 
-/*
- * Legacy PCBCells boards send raw = (degC + 49) / 0.39216 and wrap above
- * 51 degC (stm_PCB-Cells 47a1036, fixed by its PR #13). Undo both so the
- * filter, the threshold and CAN1 see the (0.39216, 0) the databases specify.
- *
- * Set to 0 when the corrected firmware is flashed - a fixed board's byte would
- * otherwise be de-biased twice, and the two encodings cannot be told apart.
- */
-#define THERM_LEGACY_DEBIAS  (1)
-#define THERM_LEGACY_BIAS    (125u)   /* 49 degC / 0.39216, rounded */
-#define THERM_LEGACY_LOWEST  (124u)   /* what a legacy board sends for 0 degC */
-
 #if THERM_LEGACY_DEBIAS
 /* 0..51 degC leaves a legacy board as 124..255; only a wrap lands in 0..123. */
 static uint8_t debiasLegacyTherm(uint8_t raw)

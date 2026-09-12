@@ -250,6 +250,112 @@ TEST(the_hottest_thermistor_is_located_not_just_measured)
     CHECK_EQ(THERM_Filtered(THERM_MaxModule(), THERM_MaxTherm()), THERM_MaxRaw());
 }
 
+/* Everyone healthy except one thermistor held at `odd`. */
+static void feedAllExcept(uint32_t oddId, uint8_t normal, uint8_t odd, int periods)
+{
+    for (int p = 0; p < periods; p++) {
+        for (uint32_t id = 211u; id <= 279u; id++) {
+            if ((id % 10u) == 0u) { continue; }
+            THERM_OnFrame(id, (id == oddId) ? odd : normal);
+        }
+        THERM_Task();
+    }
+}
+
+static const EH_ActiveError *findError(uint16_t code)
+{
+    for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].errorCode == code) { return &eh.activeErrors[i]; }
+    }
+    return NULL;
+}
+
+TEST(a_floored_thermistor_is_reported_instead_of_silently_reading_cold)
+{
+    setup();
+    feedAll(40u, 10);
+    CHECK_EQ(THERM_SaturatedCount(), 0u);
+
+    /* 229 is PCBCells2_Therm1. An open sensor floors the PCBCells lookup at
+       0 degC, which reaches us as 0 after the de-bias. */
+    feedAllExcept(229u, 40u, 0u, 10);
+    CHECK_EQ(THERM_SaturatedCount(), 1u);
+    CHECK_EQ(THERM_Filtered(2u, 1u), 0u);          /* the value still reads cold */
+
+    const EH_ActiveError *e = findError(BMS_ERR_CAN2_THERM_SATURATED);
+    CHECK(e != NULL);
+    CHECK_EQ(e->severity, ERROR_SEVERITY_WARNING);
+    CHECK_EQ(e->specificData[0], 2u);              /* module */
+    CHECK_EQ(e->specificData[1], 1u);              /* thermistor */
+    CHECK_EQ(e->specificData[2], 0u);              /* 0 = floor */
+    CHECK_EQ(e->specificData[3], 1u);              /* how many are saturated */
+}
+
+TEST(a_saturated_thermistor_is_reported_alongside_the_over_temperature)
+{
+    setup();
+    /* 254 is what wire byte 123 de-biases to: the lookup's 100 degC ceiling. */
+    feedAllExcept(211u, 40u, 254u, 10);
+    CHECK_EQ(THERM_SaturatedCount(), 1u);
+    CHECK_EQ(THERM_MaxRaw(), 254u);                /* still the hottest: may be real */
+    CHECK_EQ(THERM_MaxModule(), 1u);
+    CHECK_EQ(THERM_MaxTherm(), 1u);
+
+    const EH_ActiveError *e = findError(BMS_ERR_CAN2_THERM_SATURATED);
+    CHECK(e != NULL);
+    CHECK_EQ(e->specificData[2], 1u);              /* 1 = ceiling */
+}
+
+TEST(a_module_that_never_transmitted_is_not_a_floored_sensor)
+{
+    setup();
+    /* Module 4 never speaks: its windows are all zero, which must read as
+       silent (code 3), never as nine floored thermistors. */
+    for (int p = 0; p < 5; p++) {
+        for (uint32_t id = 211u; id <= 279u; id++) {
+            if ((id % 10u) == 0u || (id >= 241u && id <= 249u)) { continue; }
+            THERM_OnFrame(id, 40u);
+        }
+        THERM_Task();
+    }
+    CHECK(findError(BMS_ERR_CAN2_MODULE_SILENT) != NULL);
+    CHECK_EQ(THERM_SaturatedCount(), 0u);
+    CHECK(findError(BMS_ERR_CAN2_THERM_SATURATED) == NULL);
+}
+
+TEST(the_ceiling_is_reported_in_preference_to_a_floor)
+{
+    setup();
+    /* A floor on module 1 and a ceiling on module 7: the ceiling is the end
+       that can also be a genuine thermal event, so it must be the one named. */
+    for (int p = 0; p < 10; p++) {
+        for (uint32_t id = 211u; id <= 279u; id++) {
+            if ((id % 10u) == 0u) { continue; }
+            uint8_t v = 40u;
+            if (id == 211u) { v = 0u; }
+            if (id == 279u) { v = 254u; }
+            THERM_OnFrame(id, v);
+        }
+        THERM_Task();
+    }
+    CHECK_EQ(THERM_SaturatedCount(), 2u);
+    const EH_ActiveError *e = findError(BMS_ERR_CAN2_THERM_SATURATED);
+    CHECK(e != NULL);
+    CHECK_EQ(e->specificData[2], 1u);              /* ceiling */
+    CHECK_EQ(e->specificData[0], 7u);              /* module 7 */
+    CHECK_EQ(e->specificData[3], 2u);              /* both counted */
+}
+
+TEST(saturation_clears_when_the_sensor_recovers)
+{
+    setup();
+    feedAllExcept(229u, 40u, 0u, 10);
+    CHECK(findError(BMS_ERR_CAN2_THERM_SATURATED) != NULL);
+    feedAll(40u, 10);
+    CHECK_EQ(THERM_SaturatedCount(), 0u);
+    CHECK(findError(BMS_ERR_CAN2_THERM_SATURATED) == NULL);
+}
+
 int main(void)
 {
     RUN(the_filter_is_correct_from_the_first_period_onward);
@@ -265,5 +371,10 @@ int main(void)
     RUN(a_returning_pack_clears_the_fault);
     RUN(max_raw_tracks_the_hottest_thermistor);
     RUN(the_hottest_thermistor_is_located_not_just_measured);
+    RUN(a_floored_thermistor_is_reported_instead_of_silently_reading_cold);
+    RUN(a_saturated_thermistor_is_reported_alongside_the_over_temperature);
+    RUN(a_module_that_never_transmitted_is_not_a_floored_sensor);
+    RUN(the_ceiling_is_reported_in_preference_to_a_floor);
+    RUN(saturation_clears_when_the_sensor_recovers);
     return TEST_SUMMARY();
 }

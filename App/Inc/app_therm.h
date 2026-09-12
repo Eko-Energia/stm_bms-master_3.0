@@ -6,6 +6,18 @@
 #define THERM_MODULES     (7u)
 #define THERM_PER_MODULE  (9u)
 
+/*
+ * Legacy PCBCells boards send raw = (degC + 49) / 0.39216 and wrap above
+ * 51 degC (stm_PCB-Cells 47a1036, fixed by its PR #13). CAN_App_OnRx2 undoes
+ * both so everything downstream sees the (0.39216, 0) the databases specify.
+ *
+ * Set to 0 when the corrected firmware is flashed - a fixed board's byte would
+ * otherwise be de-biased twice, and the two encodings cannot be told apart.
+ */
+#define THERM_LEGACY_DEBIAS  (1)
+#define THERM_LEGACY_BIAS    (125u)   /* 49 degC / 0.39216, rounded */
+#define THERM_LEGACY_LOWEST  (124u)   /* what a legacy board sends for 0 degC */
+
 void THERM_Init(EH_HandleTypeDef *eh);
 
 /** @brief Ingest one PCBCells thermistor frame. ISR context: two byte stores. */
@@ -25,5 +37,8 @@ uint8_t THERM_MaxModule(void);
 
 /** @brief Thermistor 1..9 the THERM_MaxRaw() count came from. */
 uint8_t THERM_MaxTherm(void);
+
+/** @brief Count of received thermistors pinned at either end of the lookup. */
+uint8_t THERM_SaturatedCount(void);
 
 #endif /* APP_THERM_H */

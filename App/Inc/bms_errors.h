@@ -21,5 +21,6 @@
 #define BMS_ERR_CAN1_TX_FAIL        (9u)  /* TX mailboxes blocked             */
 #define BMS_ERR_FATAL_INIT          (10u) /* peripheral init failed; Error_Handler reached */
 #define BMS_ERR_ADC_STALLED         (11u) /* no completed ADC scan for 100 ms  */
+#define BMS_ERR_CAN2_THERM_SATURATED (12u) /* a thermistor pinned at 0 or 100 degC */
 
 #endif /* BMS_ERRORS_H */

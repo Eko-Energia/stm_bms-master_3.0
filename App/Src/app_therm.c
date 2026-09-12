@@ -8,6 +8,23 @@
 #define THERM_ID_FIRST    (211u)
 #define THERM_ID_LAST     (279u)
 
+/*
+ * The PCBCells lookup clamps to its table: Rt >= 27515 ohm returns 0 degC and
+ * Rt <= 983 ohm returns 100 degC. Both ends therefore mean "the sensor is at or
+ * past the edge of what can be measured", which on a healthy pack is an open or
+ * shorted thermistor rather than a real reading. The floor is the dangerous one:
+ * a dead sensor reads cold for ever, so that cell has no thermal protection and
+ * nothing else would say so.
+ */
+#define THERM_SAT_LOW     (0u)
+#if THERM_LEGACY_DEBIAS
+#define THERM_SAT_HIGH    (254u)   /* wire 123 de-biased; a legacy board cannot reach 255 */
+#else
+#define THERM_SAT_HIGH    (255u)
+#endif
+#define THERM_SAT_FLOOR   (0u)
+#define THERM_SAT_CEILING (1u)
+
 /* Even modules number DOWNWARD, so a plain id-minus-base decode silently
    mismaps 2, 4 and 6. The asserts below break the build on a renumber. */
 #define MODULE_OF(id)   ((uint8_t)(((id) / 10u) - 20u))
@@ -38,6 +55,7 @@ static uint8_t thermFill;
 static uint8_t thermMax;
 static uint8_t thermMaxModule;   /* 1..7, where thermMax was read */
 static uint8_t thermMaxTherm;    /* 1..9 */
+static uint8_t thermSatCount;
 static EH_HandleTypeDef *ehandler;
 
 static uint8_t trimmedMean(const uint8_t *samples, uint8_t fill)
@@ -74,6 +92,7 @@ void THERM_Init(EH_HandleTypeDef *eh)
     memset(thermWindow, 0, sizeof thermWindow);
     memset(thermFiltered, 0, sizeof thermFiltered);
     memset(thermMiss, 0, sizeof thermMiss);
+    thermSatCount = 0u;
 }
 
 void THERM_OnFrame(uint32_t stdId, uint8_t raw)
@@ -92,6 +111,7 @@ void THERM_OnFrame(uint32_t stdId, uint8_t raw)
 void THERM_Task(void)
 {
     uint8_t silentModules = 0u;
+    uint8_t satCount = 0u, satModule = 1u, satTherm = 1u, satDir = THERM_SAT_FLOOR;
 
     if (thermFill < THERM_WINDOW) { thermFill++; }
 
@@ -118,6 +138,23 @@ void THERM_Task(void)
 
             thermFiltered[p][t] = trimmedMean(thermWindow[p][t], thermFill);
             if (thermMiss[p][t] >= THERM_MISS_LIMIT) { silentModules |= (uint8_t)(1u << p); }
+
+            /* thermMiss is zeroed only by an arriving frame, so this excludes a
+               module that has never transmitted - that is code 3's job, and its
+               windows are all zero, which would otherwise read as a floor. */
+            if (thermMiss[p][t] == 0u) {
+                const uint8_t v = thermFiltered[p][t];
+                if (v == THERM_SAT_HIGH || v == THERM_SAT_LOW) {
+                    /* Report the ceiling if one exists: it is the end that can
+                       also be a genuine thermal event. */
+                    if (satCount == 0u || (v == THERM_SAT_HIGH && satDir == THERM_SAT_FLOOR)) {
+                        satModule = (uint8_t)(p + 1u);
+                        satTherm = (uint8_t)(t + 1u);
+                        satDir = (v == THERM_SAT_HIGH) ? THERM_SAT_CEILING : THERM_SAT_FLOOR;
+                    }
+                    satCount++;
+                }
+            }
         }
     }
 
@@ -145,8 +182,19 @@ void THERM_Task(void)
         } else {
             EH_clear(ehandler, BMS_ERR_CAN2_MODULE_SILENT);
         }
+
+        if (satCount != 0u) {
+            const uint8_t blob[5] = { satModule, satTherm, satDir, satCount, 0u };
+            EH_reportEx(ehandler, BMS_ERR_CAN2_THERM_SATURATED,
+                        ERROR_SEVERITY_WARNING, blob, 4u);
+        } else {
+            EH_clear(ehandler, BMS_ERR_CAN2_THERM_SATURATED);
+        }
     }
+    thermSatCount = satCount;
 }
+
+uint8_t THERM_SaturatedCount(void) { return thermSatCount; }
 
 uint8_t THERM_Filtered(uint8_t module, uint8_t therm)
 {

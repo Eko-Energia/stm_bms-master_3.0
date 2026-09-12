@@ -39,6 +39,7 @@ TEST(error_codes_match_the_csv_registry)
     CHECK_EQ(BMS_ERR_CAN1_TX_FAIL, 9);
     CHECK_EQ(BMS_ERR_FATAL_INIT, 10);
     CHECK_EQ(BMS_ERR_ADC_STALLED, 11);
+    CHECK_EQ(BMS_ERR_CAN2_THERM_SATURATED, 12);
 }
 
 TEST(heartbeat_uses_the_database_cycle_time_not_the_driver_default)
