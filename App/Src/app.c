@@ -95,6 +95,12 @@ static void initAll(void)
     HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 4, 0);
     HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 4, 0);
 
+    /* Both RX consumers before the buses start: CAN_App_Init enables the RX
+       interrupts, and these reset the state their ISRs write. A SafeState_Activ
+       or a thermistor frame landing in between would be wiped by the reset. */
+    CONTACTOR_Init(&htim3);
+    THERM_Init(&eh);
+
     /* CAN first: EH_init needs the scheduler, and faults are reportable from
        the next line onward. */
     /* Before EH_init, so a failure here cannot be reported as a fault:
@@ -110,9 +116,7 @@ static void initAll(void)
     ADC_Init(adcBuf, &eh);
     if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adcBuf, 3u) != HAL_OK) { Error_Handler(); }
 
-    CONTACTOR_Init(&htim3);
     JK_Init(&huart1, &eh);
-    THERM_Init(&eh);
     THERMAL_Init(&eh);
     LED_ChangeState(&ledGreen, LED_BLINK);
 }
