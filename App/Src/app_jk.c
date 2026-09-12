@@ -25,7 +25,6 @@ static volatile JK_State_e state;
 static uint32_t   lastPollMs;
 static uint32_t   requestMs;
 static uint8_t    failCount;
-static bool       needActivation;
 static bool       linkValid;
 static uint8_t    pendingCmd;          /* command of the request in flight */
 static JK_Data_t  data;
@@ -86,12 +85,12 @@ static uint8_t endFailedPoll(void)
     return failCount;
 }
 
-/* Spec 7.3: only three consecutive failures raise code 4, and only a timeout
-   re-arms 0x01 - activation exists for a BMS that has gone to sleep. */
+/* Spec 7.3: only three consecutive failures raise code 4. The next poll retries
+   the same read - nothing gates it, so the link recovers on the first good
+   frame however long it has been down. */
 static void onTimeout(void)
 {
     const uint8_t failures = endFailedPoll();
-    needActivation = true;
     if (failures >= JK_FAIL_LIMIT) { report(BMS_ERR_JK_COMMS_TIMEOUT, failures); }
 }
 
@@ -125,7 +124,6 @@ void JK_Init(UART_HandleTypeDef *huart, EH_HandleTypeDef *eh)
     lastPollMs = 0u - JK_POLL_MS;   /* first call is immediately due; wrap-safe */
     requestMs = 0u;
     failCount = 0u;
-    needActivation = true;                 /* activate once at startup */
     linkValid = false;
     pendingCmd = JKP_CMD_READ_ALL;
     rxReady = 0u;
@@ -182,21 +180,12 @@ void JK_Task(uint32_t nowMs)
             const uint16_t len = rxLen;
             JK_Data_t decoded;
             if (JKP_Decode(rxBuf, len, &decoded)) {
-                if (pendingCmd == JKP_CMD_ACTIVATE) {
-                    /* An activation reply is a well-formed frame with no data
-                       TLVs: it decodes all-zero. Publishing it would put 0 %
-                       SOC and 0 mV cells on the bus as valid readings, and
-                       clear the timeout fault, at every boot and reconnect. */
-                    needActivation = false;
-                } else {
-                    data = decoded;
-                    linkValid = true;
-                    failCount = 0u;
-                    needActivation = false;
-                    if (ehandler != NULL) {
-                        EH_clear(ehandler, BMS_ERR_JK_COMMS_TIMEOUT);
-                        EH_clear(ehandler, BMS_ERR_JK_FRAME_INVALID);
-                    }
+                data = decoded;
+                linkValid = true;
+                failCount = 0u;
+                if (ehandler != NULL) {
+                    EH_clear(ehandler, BMS_ERR_JK_COMMS_TIMEOUT);
+                    EH_clear(ehandler, BMS_ERR_JK_FRAME_INVALID);
                 }
                 setDirection(DE_IDLE, RE_LISTENING);
                 state = JK_IDLE;
@@ -225,7 +214,7 @@ void JK_Task(uint32_t nowMs)
     }
 
     if (Timing_Due(nowMs, &lastPollMs, JK_POLL_MS)) {
-        sendRequest(nowMs, needActivation ? JKP_CMD_ACTIVATE : JKP_CMD_READ_ALL);
+        sendRequest(nowMs, JKP_CMD_READ_ALL);
     }
 }
 
