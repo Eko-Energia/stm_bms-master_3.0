@@ -416,10 +416,12 @@ see the unbiased encoding. The de-bias is lossless: all 256 wire values map back
 count of what a corrected board would send. Only a wrap can land in `0..123`, since `0..51 degC`
 leaves a legacy board as `124..255`.
 
-This is a stopgap. Clear `THERM_LEGACY_DEBIAS` in the same change that flashes
-[stm_PCB-Cells#13](https://github.com/Eko-Energia/stm_PCB-Cells/pull/13); the encodings overlap,
-so nothing detects a mismatch at runtime. It fails loud, though - a board flashed early trips
-over-temperature on its module within three seconds.
+**This is the operating state, not a short-lived stopgap.** The upstream fix
+([stm_PCB-Cells#13](https://github.com/Eko-Energia/stm_PCB-Cells/pull/13)) was closed unmerged
+and deferred; its branch `fix/therm-encoding-offset` is kept for whoever picks it up. Clear
+`THERM_LEGACY_DEBIAS` only in the change that reflashes the boards, all seven together. The
+encodings overlap, so nothing detects a mismatch at runtime - but it fails loud: a board flashed
+early trips over-temperature on its module within three seconds.
 
 ### 6.1 Frame identification
 
@@ -489,14 +491,13 @@ The gate is `thermMiss == 0`, so a module that has never transmitted stays code 
 all-zero windows are not mistaken for nine floored sensors.
 
 Nothing is suppressed. A ceiling still raises code 2, because the byte cannot tell a short from a
-genuine 100 degC cell - that aliasing is what
-[stm_PCB-Cells#13](https://github.com/Eko-Energia/stm_PCB-Cells/pull/13) removes. Code 12 adds the
-half that was missing: the floor stops being invisible, and code 2 gains the context that its
-sensor is saturated.
+genuine 100 degC cell. Code 12 adds the half that was missing: the floor stops being invisible,
+and code 2 gains the context that its sensor is saturated.
 
-The proper fix is upstream. The PCBCells should report out-of-range distinctly instead of
-clamping, ideally over the `PCBCells<x>_NODE` frames, which are already defined in `CAN2_DB.dbc`
-with 40 bits of `Error_Specific_Data` and are never transmitted.
+The proper fix is upstream and deferred. The PCBCells should report out-of-range distinctly
+instead of clamping, ideally over the `PCBCells<x>_NODE` frames, which are already defined in
+`CAN2_DB.dbc` with 40 bits of `Error_Specific_Data` and are never transmitted. Until that
+happens, code 12 is how a dead thermistor becomes visible at all.
 
 ## 7. JK BMS link
 
@@ -853,19 +854,18 @@ also means `EH_triggerSafeState()` is never called.
 
 ### 10.1 Driver constants
 
-One override, and one constant deliberately left alone.
+Two overrides.
 
 | Constant | Driver default | Here | Why |
 | --- | ---: | ---: | --- |
 | `HEARTBEAT_INTERVAL` | 1000 ms | **5000 ms** | The DBC sets `BMSMaster_NODE` to 5000 ms. 1000 ms is a generic driver default matching **no** node in the database: of the 21 `*_NODE` frames, only four set a cycle time at all - `SafeState_NODE` 5000, `BMSMaster_NODE` 5000, `Dashboard_NODE` 5000, `RCD_STATIC_NODE` 2000 - and the rest inherit the database's unset 100 ms default. The old firmware never overrode it, so it transmitted ID 128 five times faster than its own database. |
-| `ERROR_INTERVAL` | 300 ms | **300 ms, unchanged** | Left alone deliberately. `GenMsgCycleTime` specifies the frame's *nominal* rate, which is the healthy heartbeat; the database says nothing about how fast the frame may go when faulted, so there is no conflict to resolve. Two separate constants exist precisely so the frame speeds up under fault - that is what an error frame is for - and the multiplexing depends on it. |
+| `ERROR_INTERVAL` | 300 ms, scaled by fault count | **`HEARTBEAT_INTERVAL`, 5000 ms, unscaled** | A faulting node must not add bus load. |
 
 The driver **multiplexes** through active errors via `currentTransmitIndex`, which supersedes
 the earlier lowest-numbered-active-fault rule: adopting the shared driver means adopting its
-behaviour rather than forking a third one. Keeping `ERROR_INTERVAL` at 300 ms is what makes that
-workable - three simultaneous faults all reach the bus within about a second, where a 5000 ms
-faulted rate would take fifteen, and sixteen active errors would take eighty. Cost is one 8-byte
-frame at 300 ms, roughly 0.05 % of a 500 kbit/s bus, and only while a fault is active.
+behaviour rather than forking a third one. One error goes out per transmission, so N faults take
+N * 5000 ms to cycle - 15 s for three, 80 s for sixteen. That latency is accepted: the frame is a
+status report. Contactor opening and safe state act on their own paths and do not wait for it.
 
 `SAFE_STATE_FRAME_ID (0x000)` in `error_handler.h` is **dead** - referenced nowhere in
 `error_handler.c`, and `EH_triggerSafeState()` reports a severity-0 error on the node's own
@@ -921,9 +921,12 @@ that exclusion.
 | --- | --- |
 | `RS_DIR` -> `DE` (active high), `RE_DIR` -> `/RE` (active low) | **Confirmed** by Bartek on 2026-09-11, agreeing with the inference from the SN65HVD72 pinout and a boot state of both LOW = listen. Kept as named constants, and bring-up step 6 still puts a scope on PC4/PC5 - a confirmation from memory is not a traced schematic, and the same class of inference proved wrong for the CAN standby pins. |
 | Error codes 3-11 | **Done.** Allocated here and added to the team CSV registry. |
+| Error code 12 | Allocated here; still to be added to the team CSV registry. |
+| PCBCells thermistor encoder bias | **Deferred.** `stm_PCB-Cells` PR #13 closed unmerged, branch `fix/therm-encoding-offset` kept. `THERM_LEGACY_DEBIAS` is therefore the operating state, not a stopgap - see section 6.0. |
 | CAN-DATABASE PR #46, #49 | **Both merged.** Submodule pins `master` (`323b037`); regenerated. #49 declares the CAN2 `-49` thermistor offset, which `THERM_LEGACY_DEBIAS` undoes in firmware - see section 6.0. |
-| Two driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. Both now verified by the soak. |
+| Three driver fixes pending upstream | Fixed in our vendored copies only, so every board on canonical `stm_drivers` still has them. (1) `CAN_HandleScheduled` re-armed `lastTick` on a failed enqueue, starving all but three frames of a burst. (2) `EH_reportEx`/`EH_clear` removed and re-added the node frame to swap a `getData` pointer, resetting `lastTick`; a fault fluttering at 40 ms sent the frame once a minute. (3) `updateTransmissionInterval` scaled the node frame down to 100 ms as faults accumulated, overriding `setNodeFrameSource`; now fixed at `ERROR_INTERVAL`. All verified by the soak. |
 | ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
+| Current sensor calibration is for the wrong part | The fitted sensor is a Tamura **L01Z300S05**, +/-300 A, 5 V ratiometric, `Vcc/2` at 0 A. The `2108` offset and 4 counts/A reference fit a **+/-150 A part read against a 5 V reference**; this MCU's reference is 3.3 V. Unmeasurable while the sensor is unplugged - it simply clamps - but once connected it either invents current or hides it. One zero-current ADC read on PC1 decides which: `~2108` means a divider is fitted and only the gain is wrong, `~3102` means both are. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
 
 ## 12. Verification
@@ -1048,6 +1051,6 @@ Per AGENTS.md rule 7:
 | `docs/bmsJk.md` | The JK link is **USART1** on PA9/PA10, not USART2 on PA2/PA3. |
 | `docs/canDatabase.md` | Generated sources live in `EKO_Drivers/CAN/Inc` + `Src` and are committed; document the move step and PR #46. |
 | `docs/pcb.md` | Record `PD1-OSC_OUT` as reserved but not wired, HSE as an external oscillator in BYPASS, the ADC sampling time, and the standby pin polarity. |
-| `docs/canDatabase.md` | Note that `HEARTBEAT_INTERVAL` in `Error_Corrutines` must be overridden to the database's 5000 ms, and that `ERROR_INTERVAL` is deliberately left at 300 ms because `GenMsgCycleTime` describes the nominal rate only. |
+| `docs/canDatabase.md` | Note that `HEARTBEAT_INTERVAL` and `ERROR_INTERVAL` in `Error_Corrutines` are both overridden to the database's 5000 ms, so a faulted node keeps the nominal cadence rather than speeding up. |
 | `EKO_Drivers/CAN/readme.md` | The NART section is correct; our stripped `CAN_Init` was the deviation. |
 | `docs/index.md` | Add this specification. |
