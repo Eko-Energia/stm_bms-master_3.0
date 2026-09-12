@@ -18,7 +18,13 @@
  */
 
 #define CAN_MAX_DLC (8)
-#define CAN_MAX_MSG (20)
+#define CAN_MAX_MSG (28)                    /* 21 CAN1 TX frames plus headroom */
+
+/* bxCAN on STM32F105 has 28 filter banks shared between the two peripherals.
+   Banks below CAN_SLAVE_START_FILTER_BANK belong to CAN1, at or above it to
+   CAN2. Programming a CAN2 filter into a CAN1 bank silently does nothing. */
+#define CAN_FILTER_BANK_COUNT       (28)
+#define CAN_SLAVE_START_FILTER_BANK (14)
 
 /**
  * Automatic retransmission (bxCAN NART bit), applied by CAN_Init().
@@ -33,7 +39,7 @@
  * indefinitely. bxCAN has only 3 TX mailboxes, so three such frames block every
  * further transmission. CAN_HandleScheduled() recovers via CAN_TX_FAIL_LIMIT.
  */
-#define CAN_AUTO_RETRANSMISSION (1U)
+#define CAN_AUTO_RETRANSMISSION (0U)
 
 /**
  * Consecutive failed enqueue attempts of a single scheduled message before
@@ -80,7 +86,7 @@ struct CAN_scheduledMsg
 	uint32_t lastTick;              // time stamp of the last message
 	void (*getData)(uint8_t *data, void *context); // fetches data
 	void *context;                  // user callback context
-	uint32_t txFailCount;           // consecutive failed enqueue attempts, managed by the driver
+	uint32_t txFailCount;           // consecutive periods this message could not be enqueued, managed by the driver
 };
 
 /**
@@ -108,15 +114,26 @@ struct CAN_IncomingMsg
 struct CAN_IncomingMsgList
 {
 	struct CAN_IncomingMsg list[CAN_MAX_MSG];
-	uint8_t count;
-	uint8_t receiveFlag;
-	uint8_t head;
-	uint8_t tail;
+	volatile uint8_t count;         /* written by the RX ISR, read by the main loop */
+	volatile uint8_t receiveFlag;
+	volatile uint8_t head;          /* owned by the ISR */
+	volatile uint8_t tail;          /* owned by the main loop */
 };
 
 /**
  * Setup functions
  */
+
+/**
+ * @brief Configure a 16-bit list-mode filter accepting up to four standard IDs.
+ *        Repeat an ID to fill unused slots. Call before CAN_Init().
+ */
+HAL_StatusTypeDef CAN_ConfigFilterList16(CAN_HandleTypeDef *hcan, uint8_t bank, const uint16_t stdIds[4]);
+
+/**
+ * @brief Configure a 32-bit mask-mode filter on standard IDs. Call before CAN_Init().
+ */
+HAL_StatusTypeDef CAN_ConfigFilterMask32(CAN_HandleTypeDef *hcan, uint8_t bank, uint16_t stdId, uint16_t stdMask);
 
 /**
  * @brief Initialize CAN peripheral
@@ -167,7 +184,7 @@ HAL_StatusTypeDef CAN_RemoveScheduledMsg(uint32_t id, struct CAN_scheduledMsgLis
 HAL_StatusTypeDef CAN_AddIncomingMsg(struct CAN_IncomingMsgList *buffer, CAN_RxHeaderTypeDef *header, uint8_t *data);
 
 /**
- * @brief Read and remove the pending message with the lowest CAN ID
+ * @brief Read and remove the oldest pending message (FIFO order by arrival, not by CAN ID)
  *
  * @param msg  Pointer to storage for the received message
  * @retval HAL_StatusTypeDef   State of the operation

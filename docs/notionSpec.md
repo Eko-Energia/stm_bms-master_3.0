@@ -130,7 +130,7 @@ stands. They are recorded here so the spec is not mistaken for implemented behav
 | Topic | This specification | Current project |
 | --- | --- | --- |
 | MCU documentation link | STM32F303K8T6 datasheet | `BMS-Master.ioc` targets STM32F105R8T6 — see [pcb.md](pcb.md) |
-| JK BMS UART | USART1 | `BMS-Master.ioc` configures USART1 on PA9/PA10; [bmsJk.md](bmsJk.md) describes USART2 on PA2/PA3, which is not assigned in the `.ioc` |
+| JK BMS UART | USART1 | `BMS-Master.ioc` configures USART1 on PA9/PA10. [bmsJk.md](bmsJk.md) previously described USART2 on PA2/PA3, which is not assigned in the `.ioc`; it has been corrected. |
 | Analog inputs | PC2 voltage, PC1 current, PC0 temperature | Matches the `.ioc`: PC0 `TEMP`, PC1 `HALL_OUT`, PC2 `VOLTAGE` |
 | Contactor output | PB0 | Matches the `.ioc`: PB0 `RELAY_CTRL` on TIM3_CH3 — see [pwmGeneration.md](pwmGeneration.md) |
 | Radio link | Required | No radio transceiver logic is present in the clean project |
