@@ -37,8 +37,9 @@ extern "C"
  * matches no node in the database. */
 #define HEARTBEAT_INTERVAL (5000)
 
-/** @brief Interval of error message */
-#define ERROR_INTERVAL (300)
+/* Faults keep the heartbeat cadence. One error per transmission, round-robin,
+ * so N faults take N * ERROR_INTERVAL to cycle. */
+#define ERROR_INTERVAL (HEARTBEAT_INTERVAL)
 
 /** @brief Maximum number of concurrently active errors */
 #define MAX_ACTIVE_ERRORS (16)

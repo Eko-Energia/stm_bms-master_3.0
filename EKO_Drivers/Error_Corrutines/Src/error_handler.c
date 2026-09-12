@@ -284,12 +284,10 @@ static void updateTransmissionInterval(EH_HandleTypeDef *hehandler)
 {
 	if (hehandler == NULL || hehandler->scheduler == NULL || hehandler->activeErrorCount == 0) return;
 	
-	int32_t newPeriod = 300 - ((hehandler->activeErrorCount - 1) * 30);
-	if (newPeriod < 100) newPeriod = 100;
-	
+	// fixed cadence: a faulting node must not add bus load
 	for (uint8_t i = 0; i < hehandler->scheduler->size; i++) {
 		if (hehandler->scheduler->list[i].header.StdId == hehandler->errorFrameId) {
-			hehandler->scheduler->list[i].periodMs = newPeriod;
+			hehandler->scheduler->list[i].periodMs = ERROR_INTERVAL;
 			break;
 		}
 	}

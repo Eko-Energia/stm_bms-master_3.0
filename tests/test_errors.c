@@ -80,8 +80,9 @@ TEST(a_repeatedly_reported_single_fault_keeps_the_node_frame_on_cadence)
     EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, NULL, 0u);
     CHECK_EQ(eh.activeErrorCount, 1u);
 
+    const uint32_t window = 4u * (uint32_t)ERROR_INTERVAL;
     uint32_t sent = 0u, lastSendTick = 0u, worstGapMs = 0u;
-    for (uint32_t t = 1u; t <= 6000u; t++) {
+    for (uint32_t t = 1u; t <= window; t++) {
         Fake_SetTick(t);
         /* Re-report at 1 ms, far faster than the frame period. */
         EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, NULL, 0u);
@@ -96,7 +97,7 @@ TEST(a_repeatedly_reported_single_fault_keeps_the_node_frame_on_cadence)
         }
     }
 
-    CHECK(sent >= 6000u / ERROR_INTERVAL);
+    CHECK(sent >= (window / (uint32_t)ERROR_INTERVAL) - 1u);
     CHECK(worstGapMs <= (uint32_t)ERROR_INTERVAL + 1u);
 }
 
@@ -105,14 +106,46 @@ TEST(a_second_fault_does_not_restart_the_node_frame)
 {
     setup();
     EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, NULL, 0u);
-    Fake_SetTick(299u);
+    Fake_SetTick((uint32_t)ERROR_INTERVAL - 1u);
     CAN_HandleScheduled(&hcan, &sched);
     CHECK_EQ(Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID), 0u);
 
     EH_reportEx(&eh, BMS_ERR_PACK_CURRENT_HIGH, ERROR_SEVERITY_ERROR, NULL, 0u);
-    Fake_SetTick(300u);
+    Fake_SetTick((uint32_t)ERROR_INTERVAL);
     CAN_HandleScheduled(&hcan, &sched);
     CHECK_EQ(Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID), 1u);
+}
+
+TEST(three_faults_cycle_at_the_heartbeat_cadence_not_faster)
+{
+    setup();
+    EH_reportEx(&eh, BMS_ERR_PACK_VOLT_RANGE,   ERROR_SEVERITY_ERROR, NULL, 0u);
+    EH_reportEx(&eh, BMS_ERR_PACK_CURRENT_HIGH, ERROR_SEVERITY_ERROR, NULL, 0u);
+    EH_reportEx(&eh, BMS_ERR_JK_COMMS_TIMEOUT,  ERROR_SEVERITY_ERROR, NULL, 0u);
+    CHECK_EQ(eh.activeErrorCount, 3u);
+
+    /* One full round trip is 3 * ERROR_INTERVAL: one error per transmission. */
+    const uint32_t cycle = 3u * (uint32_t)ERROR_INTERVAL;
+    uint32_t seenVolt = 0u, seenCurr = 0u, seenJk = 0u, sent = 0u;
+
+    for (uint32_t t = 1u; t <= cycle; t++) {
+        Fake_SetTick(t);
+        CAN_HandleScheduled(&hcan, &sched);
+        const uint32_t now = Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID);
+        if (now == sent) { continue; }
+        sent = now;
+        uint8_t d[8];
+        CHECK(Fake_FindTx(BMSMASTER_NODE_FRAME_ID, d, NULL));
+        const uint16_t code = (uint16_t)(d[0] | ((uint16_t)d[1] << 8));
+        if (code == BMS_ERR_PACK_VOLT_RANGE)   { seenVolt++; }
+        if (code == BMS_ERR_PACK_CURRENT_HIGH) { seenCurr++; }
+        if (code == BMS_ERR_JK_COMMS_TIMEOUT)  { seenJk++; }
+    }
+
+    CHECK_EQ(sent, 3u);              /* three sends in 15 s, not fifty */
+    CHECK_EQ(seenVolt, 1u);          /* and each fault got exactly one slot */
+    CHECK_EQ(seenCurr, 1u);
+    CHECK_EQ(seenJk, 1u);
 }
 
 TEST(clearing_the_last_fault_returns_to_healthy)
@@ -132,6 +165,7 @@ int main(void)
     RUN(a_reported_fault_reaches_the_node_frame);
     RUN(a_repeatedly_reported_single_fault_keeps_the_node_frame_on_cadence);
     RUN(a_second_fault_does_not_restart_the_node_frame);
+    RUN(three_faults_cycle_at_the_heartbeat_cadence_not_faster);
     RUN(clearing_the_last_fault_returns_to_healthy);
     return TEST_SUMMARY();
 }
