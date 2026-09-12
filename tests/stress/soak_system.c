@@ -493,6 +493,8 @@ static void soakSetTime(uint64_t absMs)
 /* ---- world model --------------------------------------------------------- */
 typedef struct {
     uint16_t adcTemp, adcCurr, adcVolt;
+    /* De-biased counts, i.e. what THERM_Filtered should read. soakWire()
+       converts each to the wire byte a PCBCells board would actually send. */
     uint8_t  thermBase;      /* fed to the 61 ordinary thermistors */
     uint8_t  thermProbe;     /* fed to module 1 thermistor 1: the liveness probe */
     uint8_t  thermHot;       /* fed to module 7 thermistor 9: the overtemp lever */
@@ -505,6 +507,8 @@ typedef struct {
 } SoakWorld;
 
 static SoakWorld world;
+
+static uint8_t soakWire(uint8_t count);
 static volatile uint16_t *soakAdcBuf;   /* app.c's adcBuf, captured after init  */
 
 static void soakProbeReset(void);
@@ -596,7 +600,7 @@ static void soakFireIsr(int which)
             const uint8_t m = (uint8_t)(1u + soakRndBelow(7u));
             const uint8_t t = (uint8_t)(1u + soakRndBelow(9u));
             id  = soakThermId(m, t);
-            payload[0] = world.thermBase;
+            payload[0] = soakWire(world.thermBase);
         }
         halQueueCanRx(&hcan2, id, payload, 8u);
         soakTraceAdd(soakIsrName[which], id, payload[0]);
@@ -740,15 +744,22 @@ static void soakFeedSafeState(void)
     }
 }
 
+/* Inverse of CAN_App_OnRx2's de-bias: the wire byte that arrives as `count`. */
+static uint8_t soakWire(uint8_t count)
+{
+    if (!world.canRxPath) { return count; }
+    return (count >= 131u) ? (uint8_t)(count - 131u) : (uint8_t)(count + 125u);
+}
+
 static void soakFeedTherm(void)
 {
     if (!world.feedTherm) { return; }
     for (uint8_t m = 1u; m <= 7u; m++) {
         for (uint8_t t = 1u; t <= 9u; t++) {
             uint8_t payload[8] = {0};
-            payload[0] = world.thermBase;
-            if (m == 1u && t == 1u) { payload[0] = world.thermProbe; }
-            if (m == 7u && t == 9u) { payload[0] = world.thermHot; }
+            payload[0] = soakWire(world.thermBase);
+            if (m == 1u && t == 1u) { payload[0] = soakWire(world.thermProbe); }
+            if (m == 7u && t == 9u) { payload[0] = soakWire(world.thermHot); }
             const uint32_t id = soakThermId(m, t);
             if (world.canRxPath) {
                 halQueueCanRx(&hcan2, id, payload, 8u);
@@ -985,7 +996,7 @@ static void soakOnePass(uint32_t stepMs)
     /* Feeds happen between passes: the reference model then sees exactly what
        CONTACTOR_Task sees on this pass. */
     if (soakAbsMs >= feedSafeNextAbs) { soakFeedSafeState(); feedSafeNextAbs += 100u; }
-    if (soakAbsMs >= feedThermNextAbs) { soakFeedTherm(); feedThermNextAbs += 1000u; }
+    if (soakAbsMs >= feedThermNextAbs) { soakFeedTherm(); feedThermNextAbs += 200u; }
 
     /* The ADC DMA completes a scan every ~84 us on hardware: always ready. */
     if (world.adcRun) { soakFireIsr(ISR_ADC_DMA); }
