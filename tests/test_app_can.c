@@ -256,6 +256,56 @@ TEST(a_failed_controller_bring_up_fails_the_init)
     CHECK(!CAN_App_Init(&h1, &h2, &eh));     /* one controller down: reports failure */
 }
 
+/* Float oracle for the legacy de-bias, independent of app_can.c's integer form. */
+static uint8_t legacyOracle(uint8_t wire)
+{
+    const double gain = 0.39216;
+    const double counts = (wire >= 124u) ? (double)wire : (double)wire + 256.0;
+    double degC = counts * gain - 49.0;
+    if (degC < 0.0) { degC = 0.0; }
+    return (uint8_t)((degC / gain) + 0.5);
+}
+
+static uint8_t throughCan2(uint8_t wire)
+{
+    setup();
+    const uint8_t data[8] = { wire };
+    Fake_QueueCanRx(&h2, 211u, data, 1u);          /* PCBCells1_Therm1 */
+    CAN_App_OnRx2(&h2);
+    THERM_Task();                                  /* fill 1: the filter is a pass-through */
+    return THERM_Filtered(1u, 1u);
+}
+
+TEST(the_legacy_thermistor_bias_is_undone_for_every_wire_value)
+{
+    for (unsigned w = 0u; w <= 255u; w++) {
+        CHECK_EQ(throughCan2((uint8_t)w), legacyOracle((uint8_t)w));
+    }
+}
+
+TEST(the_bench_capture_decodes_to_the_workshop_temperature)
+{
+    /* Raw 171 is what the bench actually logged, reported then as 67.06 degC. */
+    CHECK_EQ(throughCan2(171u), 46u);              /* 46 * 0.39216 = 18.04 degC */
+}
+
+TEST(a_wrapped_over_temperature_is_recovered_not_read_as_cold)
+{
+    /* (60 + 49) / 0.39216 = 277.9, which a legacy board truncates and wraps to 21.
+       Taken at face value that is 8.2 degC - colder than the rest of the pack. */
+    CHECK_EQ(throughCan2(21u), 152u);              /* 152 * 0.39216 = 59.6 degC */
+    CHECK_EQ(THERM_MaxRaw(), 152u);
+}
+
+TEST(an_open_sensor_and_a_silent_module_both_read_zero)
+{
+    /* A legacy board sends 124 for an open thermistor: its lookup clamps to 0 degC. */
+    CHECK_EQ(throughCan2(124u), 0u);
+    setup();                                       /* nothing received at all */
+    THERM_Task();
+    CHECK_EQ(THERM_Filtered(1u, 1u), 0u);
+}
+
 int main(void)
 {
     RUN(both_transceivers_leave_standby_before_the_buses_start);
@@ -272,5 +322,9 @@ int main(void)
     RUN(burst_contention_alone_never_reports_a_tx_fault);
     RUN(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery);
     RUN(a_failed_controller_bring_up_fails_the_init);
+    RUN(the_legacy_thermistor_bias_is_undone_for_every_wire_value);
+    RUN(the_bench_capture_decodes_to_the_workshop_temperature);
+    RUN(a_wrapped_over_temperature_is_recovered_not_read_as_cold);
+    RUN(an_open_sensor_and_a_silent_module_both_read_zero);
     return TEST_SUMMARY();
 }
