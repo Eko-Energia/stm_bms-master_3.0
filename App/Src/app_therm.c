@@ -8,14 +8,10 @@
 #define THERM_ID_FIRST    (211u)
 #define THERM_ID_LAST     (279u)
 
-/*
- * The PCBCells lookup clamps to its table: Rt >= 27515 ohm returns 0 degC and
- * Rt <= 983 ohm returns 100 degC. Both ends therefore mean "the sensor is at or
- * past the edge of what can be measured", which on a healthy pack is an open or
- * shorted thermistor rather than a real reading. The floor is the dangerous one:
- * a dead sensor reads cold for ever, so that cell has no thermal protection and
- * nothing else would say so.
- */
+/* The PCBCells lookup clamps at its table ends: Rt >= 27515 ohm reads 0 degC,
+ * Rt <= 983 ohm reads 100 degC. Either end means the sensor is past what can be
+ * measured - open or shorted. The floor is the dangerous one: a dead sensor
+ * reads cold for ever and nothing else would say so. */
 #define THERM_SAT_LOW     (0u)
 #if THERM_LEGACY_DEBIAS
 #define THERM_SAT_HIGH    (254u)   /* wire 123 de-biased; a legacy board cannot reach 255 */
@@ -139,14 +135,12 @@ void THERM_Task(void)
             thermFiltered[p][t] = trimmedMean(thermWindow[p][t], thermFill);
             if (thermMiss[p][t] >= THERM_MISS_LIMIT) { silentModules |= (uint8_t)(1u << p); }
 
-            /* thermMiss is zeroed only by an arriving frame, so this excludes a
-               module that has never transmitted - that is code 3's job, and its
-               windows are all zero, which would otherwise read as a floor. */
+            /* thermMiss is zeroed only by an arriving frame: excludes a module
+               that never transmitted, whose zero windows would read as a floor. */
             if (thermMiss[p][t] == 0u) {
                 const uint8_t v = thermFiltered[p][t];
                 if (v == THERM_SAT_HIGH || v == THERM_SAT_LOW) {
-                    /* Report the ceiling if one exists: it is the end that can
-                       also be a genuine thermal event. */
+                    /* Ceiling wins: it is the end that can also be real. */
                     if (satCount == 0u || (v == THERM_SAT_HIGH && satDir == THERM_SAT_FLOOR)) {
                         satModule = (uint8_t)(p + 1u);
                         satTherm = (uint8_t)(t + 1u);

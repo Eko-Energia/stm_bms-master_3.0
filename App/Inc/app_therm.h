@@ -6,14 +6,10 @@
 #define THERM_MODULES     (7u)
 #define THERM_PER_MODULE  (9u)
 
-/*
- * Legacy PCBCells boards send raw = (degC + 49) / 0.39216 and wrap above
- * 51 degC (stm_PCB-Cells 47a1036, fixed by its PR #13). CAN_App_OnRx2 undoes
- * both so everything downstream sees the (0.39216, 0) the databases specify.
- *
- * Set to 0 when the corrected firmware is flashed - a fixed board's byte would
- * otherwise be de-biased twice, and the two encodings cannot be told apart.
- */
+/* PCBCells boards send raw = (degC + 49) / 0.39216 and wrap above 51 degC.
+ * CAN_App_OnRx2 undoes both, giving the (0.39216, 0) the databases specify.
+ * Set to 0 only when the boards are reflashed: a corrected byte de-biased
+ * twice is wrong, and nothing detects the mismatch at runtime. */
 #define THERM_LEGACY_DEBIAS  (1)
 #define THERM_LEGACY_BIAS    (125u)   /* 49 degC / 0.39216, rounded */
 #define THERM_LEGACY_LOWEST  (124u)   /* what a legacy board sends for 0 degC */
