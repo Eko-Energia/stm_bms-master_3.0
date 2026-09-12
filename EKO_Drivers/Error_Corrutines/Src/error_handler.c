@@ -135,6 +135,7 @@ void EH_reportEx(EH_HandleTypeDef *hehandler, uint16_t errorCode, errorSeverity_
 
 	if (existingIndex >= 0) {
 		// Update existing
+		hehandler->activeErrors[existingIndex].pendingClear = 0;
 		hehandler->activeErrors[existingIndex].severity = severity;
 		hehandler->activeErrors[existingIndex].specificDataLen = dataL;
 		if (data != NULL && dataL > 0) {
@@ -146,6 +147,8 @@ void EH_reportEx(EH_HandleTypeDef *hehandler, uint16_t errorCode, errorSeverity_
 		// Insert new
 		if (hehandler->activeErrorCount < MAX_ACTIVE_ERRORS) {
 			existingIndex = hehandler->activeErrorCount;
+			hehandler->activeErrors[existingIndex].sent = 0;
+			hehandler->activeErrors[existingIndex].pendingClear = 0;
 			hehandler->activeErrorCount++;
 		} else {
 			// Find lowest severity (highest numerical enum value)
@@ -222,6 +225,12 @@ void EH_clear(EH_HandleTypeDef *hehandler, uint16_t errorCode)
 		}
 	}
 
+	if (foundIndex >= 0 && !hehandler->activeErrors[foundIndex].sent) {
+		// Never reached the bus. Hold it so the next node frame carries it once.
+		hehandler->activeErrors[foundIndex].pendingClear = 1;
+		return;
+	}
+
 	if (foundIndex >= 0) {
 		for (uint8_t i = foundIndex; i < hehandler->activeErrorCount - 1; i++) {
 			hehandler->activeErrors[i] = hehandler->activeErrors[i + 1];
@@ -244,6 +253,17 @@ void EH_clear(EH_HandleTypeDef *hehandler, uint16_t errorCode)
  * @brief Get the configured Node ID
  * @return Current node ID
  */
+uint8_t EH_getActiveCount(EH_HandleTypeDef *hehandler)
+{
+	if (hehandler == NULL) return 0;
+
+	uint8_t n = 0;
+	for (uint8_t i = 0; i < hehandler->activeErrorCount; i++) {
+		if (!hehandler->activeErrors[i].pendingClear) { n++; }
+	}
+	return n;
+}
+
 uint16_t EH_getNodeId(EH_HandleTypeDef *hehandler)
 {
 	if (hehandler == NULL) return 0;
@@ -390,7 +410,27 @@ static void getData_Error(uint8_t *data, void *context)
 	// Bytes 3-7: Specific data
 	memcpy(&data[3], hehandler->activeErrors[idx].specificData, ERROR_SPECIFIC_DATA_SIZE);
 
+	hehandler->activeErrors[idx].sent = 1;
 	hehandler->currentTransmitIndex = (idx + 1) % hehandler->activeErrorCount;
+
+	// data[] is already packed, so dropping entries here cannot affect this frame
+	for (uint8_t i = 0; i < hehandler->activeErrorCount; ) {
+		if (hehandler->activeErrors[i].pendingClear && hehandler->activeErrors[i].sent) {
+			for (uint8_t j = i; j + 1 < hehandler->activeErrorCount; j++) {
+				hehandler->activeErrors[j] = hehandler->activeErrors[j + 1];
+			}
+			hehandler->activeErrorCount--;
+		} else {
+			i++;
+		}
+	}
+
+	if (hehandler->activeErrorCount == 0) {
+		hehandler->currentTransmitIndex = 0;
+		setNodeFrameSource(hehandler, getData_HeightbeatOK, HEARTBEAT_INTERVAL);
+	} else if (hehandler->currentTransmitIndex >= hehandler->activeErrorCount) {
+		hehandler->currentTransmitIndex = 0;
+	}
 }
 
 /**

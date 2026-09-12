@@ -204,7 +204,7 @@ TEST(burst_contention_alone_never_reports_a_tx_fault)
        frame cannot get out", never "a mailbox was busy". */
     pump(10000u);
     CHECK(Fake_TxCountFor(BMSMASTER_JK_CYCLESTATS_FRAME_ID) > 0u);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 TEST(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery)
@@ -212,7 +212,7 @@ TEST(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery)
     setup();
     EH_init(&eh, &h1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
     pump(1010u);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 
     /* Bus-off, missing termination or no ACK: the mailboxes never free. The
        driver aborts after CAN_TX_FAIL_LIMIT missed periods; before this fix it
@@ -220,7 +220,7 @@ TEST(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery)
     Fake_HoldCanTx(1);
     pumpFrom(1011u, 5000u);
     CHECK(Fake_CanAbortCount() > 0u);
-    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(EH_getActiveCount(&eh), 1u);
     CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_CAN1_TX_FAIL);
     CHECK_EQ(eh.activeErrors[0].severity, ERROR_SEVERITY_WARNING);
 
@@ -236,7 +236,7 @@ TEST(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery)
 
     Fake_HoldCanTx(0);
     pumpFrom(5001u, 8000u);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 /* A failed controller bring-up happens before EH_init, so it cannot be

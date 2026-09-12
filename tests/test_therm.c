@@ -160,7 +160,7 @@ TEST(three_missed_periods_raise_pack_silent)
 {
     setup();
     feedAll(40u, 10);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 
     /* Starve module 4 only; everyone else keeps reporting. */
     for (int p = 0; p < 3; p++) {
@@ -171,7 +171,7 @@ TEST(three_missed_periods_raise_pack_silent)
         }
         THERM_Task();
     }
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
     CHECK_EQ(THERM_Filtered(4u, 1u), 40u);      /* value held, not zeroed */
 }
 
@@ -179,7 +179,7 @@ TEST(two_misses_are_silent_but_the_third_trips_the_fault)
 {
     setup();
     feedAll(40u, 10);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 
     /* Starve module 4 for two periods only: below the 3-miss threshold. */
     for (int p = 0; p < 2; p++) {
@@ -190,7 +190,7 @@ TEST(two_misses_are_silent_but_the_third_trips_the_fault)
         }
         THERM_Task();
     }
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 
     /* Third consecutive miss: threshold reached, fault trips. */
     for (uint32_t id = 211u; id <= 279u; id++) {
@@ -199,7 +199,7 @@ TEST(two_misses_are_silent_but_the_third_trips_the_fault)
         THERM_OnFrame(id, 40u);
     }
     THERM_Task();
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
 TEST(a_returning_pack_clears_the_fault)
@@ -213,9 +213,9 @@ TEST(a_returning_pack_clears_the_fault)
         }
         THERM_Task();
     }
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
     feedAll(40u, 1);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 TEST(max_raw_tracks_the_hottest_thermistor)
@@ -265,6 +265,7 @@ static void feedAllExcept(uint32_t oddId, uint8_t normal, uint8_t odd, int perio
 static const EH_ActiveError *findError(uint16_t code)
 {
     for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].pendingClear) { continue; }
         if (eh.activeErrors[i].errorCode == code) { return &eh.activeErrors[i]; }
     }
     return NULL;

@@ -100,6 +100,8 @@ typedef struct
 	errorSeverity_e severity;
 	uint8_t specificData[ERROR_SPECIFIC_DATA_SIZE];
 	uint8_t specificDataLen;
+	uint8_t sent;          /**< Has reached the bus at least once */
+	uint8_t pendingClear;  /**< Cleared before it was sent; drop after one send */
 } EH_ActiveError;
 
 /**
@@ -192,6 +194,14 @@ void EH_clear(EH_HandleTypeDef *hehandler, uint16_t errorCode);
  * @return Current node ID
  */
 uint16_t EH_getNodeId(EH_HandleTypeDef *hehandler);
+
+/**
+ * @brief Number of faults currently active.
+ *
+ * Excludes entries kept only until they have reached the bus once, so this is
+ * the node's health, not the transmit queue length.
+ */
+uint8_t EH_getActiveCount(EH_HandleTypeDef *hehandler);
 
 /**
  * @brief Check if error handler is initialized

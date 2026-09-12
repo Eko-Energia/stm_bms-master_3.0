@@ -159,7 +159,7 @@ TEST(three_timeouts_raise_the_comms_fault_and_zero_the_data)
     }
     CHECK(!JK_Valid());
     CHECK_EQ(JK_Data()->soc, 0u);
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
 TEST(a_timeout_retries_with_activation_first)
@@ -192,7 +192,7 @@ TEST(a_corrupt_response_raises_frame_invalid_not_timeout)
     reply[n - 1u] ^= 0xFFu;                       /* break the checksum */
     exchange(1000u, reply, n);
     CHECK(!JK_Valid());
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
 TEST(a_response_arriving_just_after_the_deadline_is_ignored)
@@ -270,7 +270,7 @@ TEST(the_100ms_response_timeout_survives_the_tick_wrap)
     /* Two more unanswered polls, also across the wrap, reach the limit. */
     timeout(nearWrap + 1000u);
     timeout(nearWrap + 2000u);
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
 TEST(a_failed_transmit_start_is_reported_and_counted)
@@ -290,20 +290,20 @@ TEST(a_failed_transmit_start_is_reported_and_counted)
     JK_Task(2000u);
     CHECK(!JK_Valid());
     CHECK_EQ(JK_Data()->soc, 70u);      /* one strike: data still held */
-    CHECK_EQ(eh.activeErrorCount, 0u);  /* and not yet a bus fault */
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);  /* and not yet a bus fault */
 
     Fake_ForceUartTxFail();
     Fake_SetTick(3000u);
     JK_Task(3000u);
     CHECK_EQ(JK_Data()->soc, 70u);      /* two strikes: still held */
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 
     Fake_ForceUartTxFail();
     Fake_SetTick(4000u);
     JK_Task(4000u);
     CHECK(!JK_Valid());
     CHECK_EQ(JK_Data()->soc, 0u);       /* three strikes: zeroed and reported */
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
 TEST(an_activation_reply_is_never_published_as_data)
@@ -334,17 +334,17 @@ TEST(an_activation_reply_is_never_published_as_data)
     /* Two more dropped polls reach JK_FAIL_LIMIT and raise the comms fault. */
     timeout(4000u);
     timeout(5000u);
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 
     /* A second ack must not clear that fault either. */
     exchange(6000u, ack, a);
     CHECK(!JK_Valid());
-    CHECK(eh.activeErrorCount > 0u);
+    CHECK(EH_getActiveCount(&eh) > 0u);
 
     /* The read-all that follows is what actually restores the link. */
     exchange(7000u, reply, n);
     CHECK(JK_Valid());
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 TEST(frame_invalid_is_graded_warning_and_a_timeout_error)
@@ -356,7 +356,7 @@ TEST(frame_invalid_is_graded_warning_and_a_timeout_error)
 
     reply[n - 1u] ^= 0xFFu;                 /* break the checksum */
     exchange(1000u, reply, n);
-    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(EH_getActiveCount(&eh), 1u);
     CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_JK_FRAME_INVALID);
     /* Spec 10 grades code 5 a warning; severity drives eviction priority. */
     CHECK_EQ(eh.activeErrors[0].severity, ERROR_SEVERITY_WARNING);
@@ -365,7 +365,7 @@ TEST(frame_invalid_is_graded_warning_and_a_timeout_error)
        timeout path adds code 4 alongside the standing warning. */
     timeout(2000u);
     timeout(3000u);
-    CHECK_EQ(eh.activeErrorCount, 2u);
+    CHECK_EQ(EH_getActiveCount(&eh), 2u);
     for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
         if (eh.activeErrors[i].errorCode == BMS_ERR_JK_COMMS_TIMEOUT) {
             CHECK_EQ(eh.activeErrors[i].severity, ERROR_SEVERITY_ERROR);
@@ -385,14 +385,14 @@ TEST(one_dropped_poll_is_not_a_bus_fault)
        noisy RS485 line must not take an error slot from a real fault. */
     timeout(2000u);
     CHECK(!JK_Valid());
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
     CHECK_EQ(JK_Data()->soc, 60u);          /* nor discard the last reading */
 
     timeout(3000u);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 
     timeout(4000u);
-    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(EH_getActiveCount(&eh), 1u);
     CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_JK_COMMS_TIMEOUT);
 }
 
@@ -407,7 +407,7 @@ TEST(the_comms_fault_reports_the_post_increment_failure_count)
     timeout(2000u);
     timeout(3000u);
     timeout(4000u);
-    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(EH_getActiveCount(&eh), 1u);
     CHECK_EQ(eh.activeErrors[0].errorCode, BMS_ERR_JK_COMMS_TIMEOUT);
     /* Spec 10: code 4 carries "consecutive failures", so the third failure
        reports 3 - not the pre-increment 2. */

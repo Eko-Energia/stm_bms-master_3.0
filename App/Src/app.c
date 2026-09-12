@@ -126,7 +126,7 @@ static void step(uint32_t now)
     THERMAL_Evaluate(ADC_Ready(), ADC_TempCenti(),
                      THERM_MaxRaw(), THERM_MaxModule(), THERM_MaxTherm());
 
-    const LED_STATE_e want = (eh.activeErrorCount > 0u) ? LED_ON : LED_OFF;
+    const LED_STATE_e want = (EH_getActiveCount(&eh) > 0u) ? LED_ON : LED_OFF;
     if (ledRed.state != want) { LED_ChangeState(&ledRed, want); }
     LED_Handle(&ledGreen);
     LED_Handle(&ledRed);

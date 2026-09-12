@@ -40,13 +40,14 @@ static void feed(uint16_t temp, uint16_t curr, uint16_t volt, int n)
     feedAt(0u, temp, curr, volt, n);
 }
 
-static int activeCount(void) { return (int)eh.activeErrorCount; }
+static int activeCount(void) { return (int)EH_getActiveCount(&eh); }
 
 /* Index of an active error by code, or -1. Codes 8 and 11 are separate faults
    with separate causes, so the tests must be able to tell them apart. */
 static int errorIndex(uint16_t code)
 {
     for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].pendingClear) { continue; }
         if (eh.activeErrors[i].errorCode == code) { return (int)i; }
     }
     return -1;

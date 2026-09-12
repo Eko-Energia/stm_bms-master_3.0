@@ -152,9 +152,37 @@ TEST(clearing_the_last_fault_returns_to_healthy)
 {
     setup();
     EH_reportEx(&eh, BMS_ERR_JK_COMMS_TIMEOUT, ERROR_SEVERITY_ERROR, NULL, 0u);
-    CHECK_EQ(eh.activeErrorCount, 1u);
+    CHECK_EQ(EH_getActiveCount(&eh), 1u);
     EH_clear(&eh, BMS_ERR_JK_COMMS_TIMEOUT);
-    CHECK_EQ(eh.activeErrorCount, 0u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
+}
+
+TEST(a_fault_that_clears_before_its_slot_still_reaches_the_bus_once)
+{
+    setup();
+    /* Raised and gone well inside one period: at 5000 ms cadence this would
+       otherwise never be transmitted at all. */
+    EH_reportEx(&eh, BMS_ERR_JK_FRAME_INVALID, ERROR_SEVERITY_WARNING, NULL, 0u);
+    EH_clear(&eh, BMS_ERR_JK_FRAME_INVALID);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);          /* the node is healthy again */
+
+    uint16_t codes[4] = {0u, 0u, 0u, 0u};
+    uint32_t sent = 0u;
+    for (uint32_t t = 1u; t <= 2u * (uint32_t)HEARTBEAT_INTERVAL; t++) {
+        Fake_SetTick(t);
+        CAN_HandleScheduled(&hcan, &sched);
+        const uint32_t now = Fake_TxCountFor(BMSMASTER_NODE_FRAME_ID);
+        if (now == sent) { continue; }
+        sent = now;
+        uint8_t d[8];
+        CHECK(Fake_FindTx(BMSMASTER_NODE_FRAME_ID, d, NULL));
+        if (sent <= 4u) { codes[sent - 1u] = (uint16_t)(d[0] | ((uint16_t)d[1] << 8)); }
+    }
+
+    CHECK_EQ(sent, 2u);
+    CHECK_EQ(codes[0], (uint16_t)BMS_ERR_JK_FRAME_INVALID);  /* sent once ... */
+    CHECK_EQ(codes[1], (uint16_t)HEARTBEAT_ERROR_CODE);      /* ... then back to healthy */
+    CHECK_EQ(eh.activeErrorCount, 0u);                       /* and dropped from the queue */
 }
 
 int main(void)
@@ -167,5 +195,6 @@ int main(void)
     RUN(a_second_fault_does_not_restart_the_node_frame);
     RUN(three_faults_cycle_at_the_heartbeat_cadence_not_faster);
     RUN(clearing_the_last_fault_returns_to_healthy);
+    RUN(a_fault_that_clears_before_its_slot_still_reaches_the_bus_once);
     return TEST_SUMMARY();
 }
