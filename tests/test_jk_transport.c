@@ -466,33 +466,49 @@ TEST(a_frame_error_does_not_re_arm_activation)
     CHECK_EQ(sent[8], JKP_CMD_READ_ALL);
 }
 
-/* A USART line error - framing, noise, overrun - aborts the DMA reception. The
-   module must re-arm and say WHICH kind of failure it was, or a broken wire is
-   indistinguishable from a silent BMS. */
-static void lineError(uint32_t now, uint32_t bits)
-{
-    Fake_SetTick(now);
-    JK_Task(now);                   /* the poll goes out */
-    JK_OnTxComplete();              /* receiver armed */
-    Fake_SetUartError(bits);
-    JK_OnUartError(bits);           /* HAL_UART_ErrorCallback would call this */
-    JK_Task(now);
-}
 
-TEST(a_line_error_is_reported_as_a_line_error_not_a_short_frame)
+/* One glitch per turnaround is expected on this board: DE and /RE share a net,
+   so the receiver switches on exactly as the bus settles from driven to biased.
+   It must be absorbed, not allowed to end the exchange. */
+TEST(a_single_line_error_is_absorbed_and_the_reply_still_arrives)
 {
     setup();
-    const uint32_t before = Fake_UartAbortCount();
-    lineError(0u, 0x04u);                       /* HAL_UART_ERROR_FE */
+    uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 60u);
 
-    CHECK(Fake_UartAbortCount() > before);      /* the dead DMA was torn down */
+    Fake_SetTick(0u);
+    JK_Task(0u);                       /* poll goes out */
+    JK_OnTxComplete();                 /* bus released, receiver armed */
+
+    /* The reply is already on its way when the turnaround glitch lands, so the
+       re-arm inside the error handler is what catches it. */
+    Fake_SetUartError(0x04u);
+    Fake_QueueUartRx(reply, n);
+    JK_OnUartError(0x04u);       /* re-arms; the fake copies the queued reply in */
+    JK_OnRxEvent(n);             /* app.c dispatches this on hardware */
+    JK_Task(0u);
+
+    CHECK(JK_Valid());
+    CHECK_EQ(JK_Data()->soc, 60u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);        /* and nothing is reported */
+}
+
+TEST(persistent_line_errors_are_still_reported)
+{
+    setup();
+    Fake_SetTick(0u);
+    JK_Task(0u);
+    JK_OnTxComplete();
+    Fake_SetUartError(0x04u);
+    for (int i = 0; i < 8; i++) { JK_OnUartError(0x04u); }   /* past JK_LINE_ERR_LIMIT */
+    JK_Task(0u);
+
     CHECK_EQ(EH_getActiveCount(&eh), 1u);
     const EH_ActiveError *e = &eh.activeErrors[0];
     CHECK_EQ(e->errorCode, BMS_ERR_JK_FRAME_INVALID);
     CHECK_EQ(e->severity, ERROR_SEVERITY_WARNING);
     CHECK_EQ(e->specificDataLen, 2u);
-    CHECK_EQ(e->specificData[0], 0x04u);        /* the USART error bits */
-    CHECK_EQ(e->specificData[1], 1u);           /* kind 1 = line, not a frame length */
+    CHECK_EQ(e->specificData[0], 0x04u);
+    CHECK_EQ(e->specificData[1], 1u);            /* kind 1 = line */
 }
 
 TEST(a_short_frame_still_reports_as_a_frame_not_a_line_error)
@@ -520,16 +536,19 @@ TEST(a_line_error_outside_an_exchange_is_absorbed_silently)
     CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
-TEST(the_link_recovers_after_a_line_error)
+TEST(the_link_recovers_after_persistent_line_errors)
 {
     setup();
-    lineError(0u, 0x04u);
+    Fake_SetTick(0u);
+    JK_Task(0u);
+    JK_OnTxComplete();
+    Fake_SetUartError(0x04u);
+    for (int i = 0; i < 8; i++) { JK_OnUartError(0x04u); }
+    JK_Task(0u);
     CHECK(EH_getActiveCount(&eh) > 0u);
 
-    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
     uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 60u);
-    exchange(1000u, ack, a);
-    exchange(2000u, reply, n);
+    exchange(1000u, reply, n);
     CHECK(JK_Valid());                          /* a good frame clears it */
     CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
@@ -551,10 +570,11 @@ int main(void)
     RUN(a_failed_transmit_start_is_reported_and_counted);
     RUN(an_activation_reply_is_never_published_as_data);
     RUN(frame_invalid_is_graded_warning_and_a_timeout_error);
-    RUN(a_line_error_is_reported_as_a_line_error_not_a_short_frame);
+    RUN(a_single_line_error_is_absorbed_and_the_reply_still_arrives);
+    RUN(persistent_line_errors_are_still_reported);
     RUN(a_short_frame_still_reports_as_a_frame_not_a_line_error);
     RUN(a_line_error_outside_an_exchange_is_absorbed_silently);
-    RUN(the_link_recovers_after_a_line_error);
+    RUN(the_link_recovers_after_persistent_line_errors);
     RUN(one_dropped_poll_is_not_a_bus_fault);
     RUN(the_comms_fault_reports_the_post_increment_failure_count);
     RUN(a_frame_error_does_not_re_arm_activation);
