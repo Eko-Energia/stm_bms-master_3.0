@@ -403,6 +403,27 @@ TEST(a_disabled_thermistor_that_goes_quiet_is_not_reported_silent)
     CHECK(findError(BMS_ERR_CAN2_MODULE_SILENT) == NULL);
 }
 
+/* Silence is tracked per pack, not per thermistor, so disabling one must not
+   blind us to its whole pack dropping off the bus. */
+TEST(a_pack_holding_a_disabled_thermistor_still_reports_silent)
+{
+    setup();
+    feedAll(40u, 10);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
+
+    for (int p = 0; p < 3; p++) {                  /* starve pack 6 entirely */
+        for (uint32_t id = 211u; id <= 279u; id++) {
+            if ((id % 10u) == 0u) { continue; }
+            if (id >= 261u && id <= 269u) { continue; }
+            THERM_OnFrame(id, 40u);
+        }
+        THERM_Task();
+    }
+    const EH_ActiveError *e = findError(BMS_ERR_CAN2_MODULE_SILENT);
+    CHECK(e != NULL);
+    if (e != NULL) { CHECK_EQ(e->specificData[0], 1u << 5); }   /* pack 6 */
+}
+
 int main(void)
 {
     RUN(the_filter_is_correct_from_the_first_period_onward);
@@ -425,5 +446,6 @@ int main(void)
     RUN(saturation_clears_when_the_sensor_recovers);
     RUN(a_disabled_thermistor_reports_zero_and_raises_nothing);
     RUN(a_disabled_thermistor_that_goes_quiet_is_not_reported_silent);
+    RUN(a_pack_holding_a_disabled_thermistor_still_reports_silent);
     return TEST_SUMMARY();
 }
