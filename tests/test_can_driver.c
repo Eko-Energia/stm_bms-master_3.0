@@ -84,16 +84,16 @@ TEST(scheduler_keeps_cadence_without_drift)
     CHECK_EQ(Fake_TxCountFor(130u), 20u);
 }
 
-/* The real BMS Master registration: nine PCB thermistor frames, nine JK frames
-   and END all on the DBC's 1000 ms cycle, plus the 500 ms measurement frame.
-   Nineteen of the twenty fall due in the same pass. */
+/* The real BMS Master registration: nine PCB thermistor frames and nine JK
+   frames on the DBC's 1000 ms cycle, plus the 500 ms measurement frame.
+   Eighteen of the nineteen fall due in the same pass. */
 static const struct { uint32_t id; uint32_t periodMs; } burst[] = {
     { 0x82u, 500u },
     { 0x83u, 1000u }, { 0x84u, 1000u }, { 0x85u, 1000u }, { 0x86u, 1000u },
     { 0x87u, 1000u }, { 0x88u, 1000u }, { 0x89u, 1000u }, { 0x8Au, 1000u },
     { 0x8Bu, 1000u }, { 0x8Cu, 1000u }, { 0x8Du, 1000u }, { 0x8Eu, 1000u },
     { 0x8Fu, 1000u }, { 0x90u, 1000u }, { 0x91u, 1000u }, { 0x92u, 1000u },
-    { 0x93u, 1000u }, { 0x94u, 1000u }, { 0x9Fu, 1000u }
+    { 0x93u, 1000u }, { 0x94u, 1000u }
 };
 #define BURST_COUNT (sizeof burst / sizeof burst[0])
 
@@ -131,8 +131,8 @@ TEST(every_frame_of_the_burst_keeps_its_cadence)
     struct CAN_scheduledMsgList list = {0};
     addBurst(&list);
 
-    /* 6 s of 1 ms superloop passes. 6010, not 6000: twenty frames need seven
-       passes to clear three mailboxes, so the last burst drains just after. */
+    /* 6 s of 1 ms superloop passes. 6010, not 6000: the burst needs several
+       passes to clear three mailboxes, so the last one drains just after. */
     for (uint32_t t = 0; t <= 6010u; t++) {
         Fake_SetTick(t);
         CAN_HandleScheduled(&hcan, &list);

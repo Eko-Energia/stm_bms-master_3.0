@@ -46,12 +46,23 @@ TEST(both_transceivers_leave_standby_before_the_buses_start)
     CHECK_EQ(Fake_PinState(nCAN2_Stby_GPIO_Port, nCAN2_Stby_Pin), GPIO_PIN_RESET);
 }
 
-TEST(twenty_frames_are_registered_plus_the_node_frame)
+TEST(nineteen_frames_are_registered_plus_the_node_frame)
 {
     setup();
-    CHECK_EQ(CAN_App_Scheduler()->size, 20u);
+    CHECK_EQ(CAN_App_Scheduler()->size, 19u);
     EH_init(&eh, &h1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
-    CHECK_EQ(CAN_App_Scheduler()->size, 21u);
+    CHECK_EQ(CAN_App_Scheduler()->size, 20u);
+}
+
+/* BMSMaster_END is defined in the database but must never be transmitted. */
+TEST(the_end_frame_is_never_registered_or_sent)
+{
+    setup();
+    pump(3000u);
+    CHECK_EQ(Fake_TxCountFor(BMSMASTER_END_FRAME_ID), 0u);
+    for (uint8_t i = 0u; i < CAN_App_Scheduler()->size; i++) {
+        CHECK(CAN_App_Scheduler()->list[i].header.StdId != BMSMASTER_END_FRAME_ID);
+    }
 }
 
 TEST(every_expected_frame_id_appears_on_the_bus)
@@ -69,11 +80,12 @@ TEST(every_expected_frame_id_appears_on_the_bus)
         BMSMASTER_JK_CELLS_1_4_FRAME_ID, BMSMASTER_JK_CELLS_5_8_FRAME_ID,
         BMSMASTER_JK_CELLS_9_12_FRAME_ID, BMSMASTER_JK_CELLS_13_16_FRAME_ID,
         BMSMASTER_JK_CELLS_17_20_FRAME_ID, BMSMASTER_JK_CELLS_21_FRAME_ID,
-        BMSMASTER_JK_TEMP_FRAME_ID, BMSMASTER_JK_CYCLESTATS_FRAME_ID,
-        BMSMASTER_END_FRAME_ID
+        BMSMASTER_JK_TEMP_FRAME_ID, BMSMASTER_JK_CYCLESTATS_FRAME_ID
     };
-    /* All 20 ids, not a sample: a deleted registration must fail this loop. */
-    CHECK_EQ(sizeof ids / sizeof ids[0], 20u);
+    /* All 19 ids, not a sample: a deleted registration must fail this loop.
+       BMSMaster_END is deliberately absent - it exists in the database for
+       convenience and must never go on the bus. */
+    CHECK_EQ(sizeof ids / sizeof ids[0], 19u);
     for (size_t i = 0; i < sizeof ids / sizeof ids[0]; i++) {
         CHECK(Fake_TxCountFor(ids[i]) > 0u);
     }
@@ -88,15 +100,6 @@ TEST(the_measurement_frame_runs_at_two_hertz)
     /* 500 ms period over 10 s: 20 frames. */
     CHECK_EQ(Fake_TxCountFor(BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID), 20u);
     CHECK_EQ(Fake_TxCountFor(BMSMASTER_JK_PACK_FRAME_ID), 10u);      /* 1000 ms */
-}
-
-TEST(the_end_frame_is_eight_zero_bytes)
-{
-    setup();
-    pump(2000u);
-    uint8_t data[8];
-    CHECK(Fake_FindTx(BMSMASTER_END_FRAME_ID, data, NULL));
-    for (int i = 0; i < 8; i++) { CHECK_EQ(data[i], 0u); }
 }
 
 TEST(measurements_reach_the_payload)
@@ -309,10 +312,10 @@ TEST(an_open_sensor_and_a_silent_module_both_read_zero)
 int main(void)
 {
     RUN(both_transceivers_leave_standby_before_the_buses_start);
-    RUN(twenty_frames_are_registered_plus_the_node_frame);
+    RUN(nineteen_frames_are_registered_plus_the_node_frame);
+    RUN(the_end_frame_is_never_registered_or_sent);
     RUN(every_expected_frame_id_appears_on_the_bus);
     RUN(the_measurement_frame_runs_at_two_hertz);
-    RUN(the_end_frame_is_eight_zero_bytes);
     RUN(measurements_reach_the_payload);
     RUN(the_thermistor_frames_carry_the_transpose);
     RUN(link_down_jk_frames_carry_zero_payload_on_cadence);

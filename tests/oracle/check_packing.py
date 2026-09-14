@@ -105,7 +105,6 @@ EXPECTED = {
         "BMSMaster_JK_Cycles": 1234,
         "BMSMaster_JK_CellCount": 21,
     },
-    0x09F: {},                                  # BMSMaster_END: no signals defined
 }
 for _t in range(1, 10):
     EXPECTED[0x82 + _t] = _therm_expected(_t)

@@ -190,10 +190,6 @@ bool CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleT
     add(BMSMASTER_JK_TEMP_FRAME_ID,        BMSMASTER_JK_TEMP_LENGTH,        BMSMASTER_JK_TEMP_CYCLE_TIME_MS,        getJkTemp, NULL);
     add(BMSMASTER_JK_CYCLESTATS_FRAME_ID,  BMSMASTER_JK_CYCLESTATS_LENGTH,  BMSMASTER_JK_CYCLESTATS_CYCLE_TIME_MS,  getJkCycles, NULL);
 
-    /* END has no signals defined; honour the cycle time with 8 zero bytes.
-       A NULL getData leaves the scheduler's zeroed buffer untouched. */
-    add(BMSMASTER_END_FRAME_ID, BMSMASTER_END_LENGTH, BMSMASTER_END_CYCLE_TIME_MS, NULL, NULL);
-
     return initOk;
 }
 

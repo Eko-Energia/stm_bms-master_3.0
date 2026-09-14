@@ -46,7 +46,6 @@ not 32. `app_can.c` registers 20 of them; `EH_init()` registers the 21st, `BMSMa
 | 146 | `BMSMaster_JK_Cells_21` | 2 | 1000 ms |
 | 147 | `BMSMaster_JK_Temp` | 8 | 1000 ms |
 | 148 | `BMSMaster_JK_CycleStats` | 8 | 1000 ms |
-| 159 | `BMSMaster_END` | 8 | 1000 ms |
 
 The JK cell frames now span **IDs 141-146** (21S: four 4-cell frames plus one 1-cell frame),
 with `JK_Temp` and `JK_CycleStats` moved down to **147** and **148** respectively

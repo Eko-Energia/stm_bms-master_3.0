@@ -773,10 +773,12 @@ is why `CAN_App_Init` runs before it and exposes `CAN_App_Scheduler()`.
 | 141-146 | `BMSMaster_JK_Cells_*` | 8 / 2 | 1000 ms |
 | 147 | `BMSMaster_JK_Temp` | 8 | 1000 ms |
 | 148 | `BMSMaster_JK_CycleStats` | 8 | 1000 ms |
-| 159 | `BMSMaster_END` | 8 | 1000 ms |
+`BMSMaster_END` (159) is defined in the database but **never transmitted**. It exists there for
+convenience and has no signals; putting 8 zero bytes on the bus to honour a cycle time it was
+never meant to have is noise other nodes have to filter. `test_app_can.c` asserts it is neither
+registered nor sent.
 
-`BMSMaster_END` has no signals defined; it is transmitted as 8 zero bytes to honour the cycle
-time. Total offered load is ~21 frames/s, about **0.3 %** of a 500 kbit/s bus.
+Total offered load is ~20 frames/s, about **0.3 %** of a 500 kbit/s bus.
 
 ### 9.3 Driver corrections
 

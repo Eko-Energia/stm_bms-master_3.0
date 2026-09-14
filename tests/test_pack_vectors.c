@@ -161,11 +161,10 @@ TEST(dump_vectors_for_the_oracle)
         BMSMASTER_JK_CELLS_1_4_FRAME_ID, BMSMASTER_JK_CELLS_5_8_FRAME_ID,
         BMSMASTER_JK_CELLS_9_12_FRAME_ID, BMSMASTER_JK_CELLS_13_16_FRAME_ID,
         BMSMASTER_JK_CELLS_17_20_FRAME_ID, BMSMASTER_JK_CELLS_21_FRAME_ID,
-        BMSMASTER_JK_TEMP_FRAME_ID, BMSMASTER_JK_CYCLESTATS_FRAME_ID,
-        BMSMASTER_END_FRAME_ID
+        BMSMASTER_JK_TEMP_FRAME_ID, BMSMASTER_JK_CYCLESTATS_FRAME_ID
     };
     /* Every frame app_can.c schedules, plus the NODE frame - not a sample. */
-    CHECK_EQ(sizeof ids / sizeof ids[0], 21u);
+    CHECK_EQ(sizeof ids / sizeof ids[0], 20u);
     for (size_t k = 0; k < sizeof ids / sizeof ids[0]; k++) {
         uint8_t d[8];
         CHECK(Fake_FindTx(ids[k], d, NULL));
