@@ -535,6 +535,30 @@ instead of clamping, ideally over the `PCBCells<x>_NODE` frames, which are alrea
 `CAN2_DB.dbc` with 40 bits of `Error_Specific_Data` and are never transmitted. Until that
 happens, code 12 is how a dead thermistor becomes visible at all.
 
+### 6.6 Disabling a broken thermistor
+
+`App/Inc/bms_therm_disabled.h` lists positions accepted as broken. A listed position
+reports **0 degC** on CAN1 and is skipped before any bookkeeping runs, so it reaches
+nothing: not the saturation count (code 12), not the silent bitmap (code 3), and not
+the pack maximum behind `CAN2_TEMP_HIGH` (code 2).
+
+Entries are `X(module, therm)` - the CAN1 signal `BMSMaster_PCB<module>Therm<therm>Temp`,
+and equally the CAN2 frame `PCBCells<module>_Therm<therm>`. The odd-up / even-down
+reversal of section 6.1 is in the **stdId**, not the name, so the three always agree. An
+index outside 1..7 or 1..9 fails a `_Static_assert`.
+
+**Nothing announces the exclusion.** On the bus a disabled position is indistinguishable
+from a genuine 0 degC reading, and its cell has no thermal protection while listed. The
+list exists so a known-broken sensor stops raising faults that mask real ones, not
+because the reading is safe to ignore. Repairing the board is the fix; deleting the entry
+re-arms the checks.
+
+Which positions are listed is operational state, not specification: it lives in that
+header and nowhere else, together with the reason for each entry.
+`tests/oracle/check_packing.py` parses the header and `tests/test_therm.c` drives its
+cases off `THERM_DISABLED_LIST`, so editing the list moves the tests and the packing
+expectations with it.
+
 ## 7. JK BMS link
 
 Half-duplex RS485 on USART1 via an SN65HVD72, 115200 8N1. Protocol V2.5

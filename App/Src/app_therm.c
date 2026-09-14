@@ -1,6 +1,8 @@
 #include "app_therm.h"
 #include "bms_errors.h"
+#include "bms_therm_disabled.h"
 #include "CAN2_DB.h"
+#include <stdbool.h>
 #include <string.h>
 
 #define THERM_WINDOW      (10u)   /* 10 s at 1 Hz */
@@ -33,6 +35,22 @@ _Static_assert(THERM_OF(PCBCELLS6_THERM9_FRAME_ID) == 9u, "even module counts do
 _Static_assert(THERM_OF(PCBCELLS7_THERM9_FRAME_ID) == 9u, "odd module counts up");
 _Static_assert(MODULE_OF(PCBCELLS4_THERM9_FRAME_ID) == 4u, "module map drifted");
 _Static_assert(THERM_OF(PCBCELLS4_THERM9_FRAME_ID) == 9u, "even module counts down");
+
+#define X(m, t) _Static_assert((m) >= 1u && (m) <= THERM_MODULES &&             \
+                               (t) >= 1u && (t) <= THERM_PER_MODULE,            \
+                               "disabled thermistor is not a real position");
+THERM_DISABLED_LIST(X)
+#undef X
+
+/* Accepted as broken: reports 0 degC and is excluded from every check. */
+static bool thermIsDisabled(uint8_t module, uint8_t therm)
+{
+    (void)module; (void)therm;      /* an empty list reads neither */
+#define X(m, t) if (module == (m) && therm == (t)) { return true; }
+    THERM_DISABLED_LIST(X)
+#undef X
+    return false;
+}
 
 /* Written by the CAN2 ISR, read by THERM_Task. Byte stores are atomic on M3,
    so no critical section is needed anywhere in this module. */
@@ -109,6 +127,12 @@ void THERM_Task(void)
 
     for (uint8_t p = 0u; p < THERM_MODULES; p++) {
         for (uint8_t t = 0u; t < THERM_PER_MODULE; t++) {
+            if (thermIsDisabled((uint8_t)(p + 1u), (uint8_t)(t + 1u))) {
+                thermSeen[p][t] = 0u;       /* the ISR still sets it; nothing reads it */
+                thermFiltered[p][t] = 0u;   /* what CAN1 sends, and never the argmax */
+                continue;                   /* thermMiss frozen: no silence, no saturation */
+            }
+
             /*
              * Clear the flag BEFORE reading the value: a frame landing
              * mid-sweep is still used, and no sample is lost. */

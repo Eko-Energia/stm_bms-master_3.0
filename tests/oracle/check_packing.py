@@ -13,12 +13,14 @@ mismatch even though the frame still decodes without error.
 """
 import math
 import pathlib
+import re
 import sys
 
 import cantools
 
 HERE = pathlib.Path(__file__).resolve().parent
 DBC = HERE.parents[1] / "docs" / "CAN-DATABASE" / "CAN_DB.dbc"
+DISABLED_H = HERE.parents[1] / "App" / "Inc" / "bms_therm_disabled.h"
 
 THERM_SCALE = 0.39216  # BMSMaster_PCB<m>Therm<t>Temp: raw count -> degC
 
@@ -37,6 +39,14 @@ def _therm_of(frame_id: int) -> int:
     return o if (m & 1) else (10 - o)
 
 
+def _disabled_positions() -> set:
+    """(module, thermistor) pairs from THERM_DISABLED_LIST, parsed out of the
+    firmware header rather than duplicated here, so editing the list moves the
+    oracle with it. Those positions report 0 degC and raise nothing."""
+    body = DISABLED_H.read_text().split("THERM_DISABLED_LIST(X)", 1)[1]
+    return {(int(m), int(t)) for m, t in re.findall(r"X\((\d+)u,\s*(\d+)u\)", body)}
+
+
 def _therm_expected(therm_index: int) -> dict:
     """Expected decoded values for BMSMaster_PCBsTherm<therm_index>Temp,
     from the fixture's THERM_OnFrame(id, 60 + id % 7) for id in 211..279
@@ -46,8 +56,11 @@ def _therm_expected(therm_index: int) -> dict:
         if frame_id % 10 == 0:
             continue
         raw[(_module_of(frame_id), _therm_of(frame_id))] = 60 + (frame_id % 7)
+    disabled = _disabled_positions()
     result = {
-        f"BMSMaster_PCB{m}Therm{therm_index}Temp": raw[(m, therm_index)] * THERM_SCALE
+        f"BMSMaster_PCB{m}Therm{therm_index}Temp":
+            0.0 if (m, therm_index) in disabled
+            else raw[(m, therm_index)] * THERM_SCALE
         for m in range(1, 8)
     }
     if therm_index == 9:

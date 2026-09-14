@@ -1,6 +1,7 @@
 #include "test_runner.h"
 #include "app_therm.h"
 #include "bms_errors.h"
+#include "bms_therm_disabled.h"
 #include "error_handler.h"
 #include "CAN_DB.h"
 #include "CAN2_DB.h"
@@ -105,7 +106,8 @@ TEST(all_63_database_ids_map_to_their_own_module_and_thermistor)
 {
     setup();
     /* The _Static_asserts sample four ids; THERM_OnFrame must agree with the
-       database on all 63, or a renumber cross-maps thermistors silently. */
+       database on all 63, or a renumber cross-maps thermistors silently.
+       A position on THERM_DISABLED_LIST reads 0 whatever its frame carried. */
     for (uint8_t m = 0u; m < THERM_MODULES; m++) {
         for (uint8_t t = 0u; t < THERM_PER_MODULE; t++) {
             THERM_OnFrame(dbThermIds[m][t], (uint8_t)(10u + (m * THERM_PER_MODULE) + t));
@@ -114,8 +116,11 @@ TEST(all_63_database_ids_map_to_their_own_module_and_thermistor)
     THERM_Task();
     for (uint8_t m = 0u; m < THERM_MODULES; m++) {
         for (uint8_t t = 0u; t < THERM_PER_MODULE; t++) {
-            CHECK_EQ(THERM_Filtered((uint8_t)(m + 1u), (uint8_t)(t + 1u)),
-                     (uint8_t)(10u + (m * THERM_PER_MODULE) + t));
+            uint8_t want = (uint8_t)(10u + (m * THERM_PER_MODULE) + t);
+#define X(dm, dt) if (m == ((dm) - 1u) && t == ((dt) - 1u)) { want = 0u; }
+            THERM_DISABLED_LIST(X)
+#undef X
+            CHECK_EQ(THERM_Filtered((uint8_t)(m + 1u), (uint8_t)(t + 1u)), want);
         }
     }
 }
@@ -357,6 +362,47 @@ TEST(saturation_clears_when_the_sensor_recovers)
     CHECK(findError(BMS_ERR_CAN2_THERM_SATURATED) == NULL);
 }
 
+/* Driven off THERM_DISABLED_LIST rather than hard-coded ids, so editing the
+   header moves the tests with it. */
+TEST(a_disabled_thermistor_reports_zero_and_raises_nothing)
+{
+    setup();
+    for (int p = 0; p < 10; p++) {
+        for (uint32_t id = 211u; id <= 279u; id++) {
+            if ((id % 10u) == 0u) { continue; }
+            THERM_OnFrame(id, 40u);
+        }
+#define X(m, t) THERM_OnFrame(dbThermIds[(m) - 1u][(t) - 1u], 255u);
+        THERM_DISABLED_LIST(X)
+#undef X
+        THERM_Task();
+    }
+
+#define X(m, t) CHECK_EQ(THERM_Filtered((m), (t)), 0u);
+    THERM_DISABLED_LIST(X)
+#undef X
+    CHECK_EQ(THERM_SaturatedCount(), 0u);
+    CHECK(findError(BMS_ERR_CAN2_THERM_SATURATED) == NULL);
+    CHECK_EQ(THERM_MaxRaw(), 40u);                 /* a ceiling that cannot win */
+}
+
+TEST(a_disabled_thermistor_that_goes_quiet_is_not_reported_silent)
+{
+    setup();
+    for (int p = 0; p < 5; p++) {
+        for (uint32_t id = 211u; id <= 279u; id++) {
+            if ((id % 10u) == 0u) { continue; }
+            int disabled = 0;
+#define X(m, t) if (id == dbThermIds[(m) - 1u][(t) - 1u]) { disabled = 1; }
+            THERM_DISABLED_LIST(X)
+#undef X
+            if (!disabled) { THERM_OnFrame(id, 40u); }
+        }
+        THERM_Task();
+    }
+    CHECK(findError(BMS_ERR_CAN2_MODULE_SILENT) == NULL);
+}
+
 int main(void)
 {
     RUN(the_filter_is_correct_from_the_first_period_onward);
@@ -377,5 +423,7 @@ int main(void)
     RUN(a_module_that_never_transmitted_is_not_a_floored_sensor);
     RUN(the_ceiling_is_reported_in_preference_to_a_floor);
     RUN(saturation_clears_when_the_sensor_recovers);
+    RUN(a_disabled_thermistor_reports_zero_and_raises_nothing);
+    RUN(a_disabled_thermistor_that_goes_quiet_is_not_reported_silent);
     return TEST_SUMMARY();
 }
