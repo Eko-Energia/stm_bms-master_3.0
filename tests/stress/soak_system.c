@@ -753,7 +753,7 @@ static void soakFeedSafeState(void)
 static uint8_t soakWire(uint8_t count)
 {
     if (!world.canRxPath) { return count; }
-    return (count >= 131u) ? (uint8_t)(count - 131u) : (uint8_t)(count + 125u);
+    return (count >= 132u) ? (uint8_t)(count - 132u) : (uint8_t)(count + 124u);
 }
 
 static void soakFeedTherm(void)

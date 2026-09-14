@@ -264,8 +264,11 @@ static uint8_t legacyOracle(uint8_t wire)
 {
     const double gain = 0.39216;
     const double counts = (wire >= 124u) ? (double)wire : (double)wire + 256.0;
-    double degC = counts * gain - 49.0;
-    if (degC < 0.0) { degC = 0.0; }
+    /* Middle of the bucket the board truncated into, clamped to its lookup
+       table, then encoded the way a corrected board encodes. */
+    double degC = (counts + 0.5) * gain - 49.0;
+    if (degC < 0.0)   { degC = 0.0; }
+    if (degC > 100.0) { degC = 100.0; }
     return (uint8_t)((degC / gain) + 0.5);
 }
 
@@ -289,15 +292,15 @@ TEST(the_legacy_thermistor_bias_is_undone_for_every_wire_value)
 TEST(the_bench_capture_decodes_to_the_workshop_temperature)
 {
     /* Raw 171 is what the bench actually logged, reported then as 67.06 degC. */
-    CHECK_EQ(throughCan2(171u), 46u);              /* 46 * 0.39216 = 18.04 degC */
+    CHECK_EQ(throughCan2(171u), 47u);              /* 47 * 0.39216 = 18.43 degC */
 }
 
 TEST(a_wrapped_over_temperature_is_recovered_not_read_as_cold)
 {
     /* (60 + 49) / 0.39216 = 277.9, which a legacy board truncates and wraps to 21.
        Taken at face value that is 8.2 degC - colder than the rest of the pack. */
-    CHECK_EQ(throughCan2(21u), 152u);              /* 152 * 0.39216 = 59.6 degC */
-    CHECK_EQ(THERM_MaxRaw(), 152u);
+    CHECK_EQ(throughCan2(21u), 153u);              /* 153 * 0.39216 = 60.0 degC */
+    CHECK_EQ(THERM_MaxRaw(), 153u);
 }
 
 TEST(an_open_sensor_and_a_silent_module_both_read_zero)
@@ -307,6 +310,22 @@ TEST(an_open_sensor_and_a_silent_module_both_read_zero)
     setup();                                       /* nothing received at all */
     THERM_Task();
     CHECK_EQ(THERM_Filtered(1u, 1u), 0u);
+}
+
+/* The gain is 100/255, so these three land on exact counts - and they are the
+   three the fault logic keys on. */
+TEST(the_ends_the_fault_logic_keys_on_decode_exactly)
+{
+    CHECK_EQ(throughCan2(124u), 0u);               /* 0 degC, lookup floor */
+    CHECK_EQ(throughCan2(21u), 153u);              /* 60 degC, CAN2_TEMP_HIGH limit */
+    CHECK_EQ(throughCan2(123u), 255u);             /* 100 degC, lookup ceiling */
+}
+
+TEST(every_wire_value_maps_to_a_distinct_count)
+{
+    uint8_t hits[256] = { 0u };
+    for (unsigned w = 0u; w <= 255u; w++) { hits[throughCan2((uint8_t)w)]++; }
+    for (unsigned v = 0u; v <= 255u; v++) { CHECK_EQ(hits[v], 1u); }
 }
 
 int main(void)
@@ -326,6 +345,8 @@ int main(void)
     RUN(a_frame_that_cannot_get_out_raises_tx_fail_and_clears_on_recovery);
     RUN(a_failed_controller_bring_up_fails_the_init);
     RUN(the_legacy_thermistor_bias_is_undone_for_every_wire_value);
+    RUN(the_ends_the_fault_logic_keys_on_decode_exactly);
+    RUN(every_wire_value_maps_to_a_distinct_count);
     RUN(the_bench_capture_decodes_to_the_workshop_temperature);
     RUN(a_wrapped_over_temperature_is_recovered_not_read_as_cold);
     RUN(an_open_sensor_and_a_silent_module_both_read_zero);

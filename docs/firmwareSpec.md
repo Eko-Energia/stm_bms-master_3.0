@@ -412,9 +412,43 @@ to `uint8_t` without clamping, so readings above 51 degC wrap: 60 degC arrives a
 offset `-49`; it cannot express the wrap.
 
 `CAN_App_OnRx2` reverses both before `THERM_OnFrame`, so the window, the threshold and CAN1 all
-see the unbiased encoding. The de-bias is lossless: all 256 wire values map back to within one
-count of what a corrected board would send. Only a wrap can land in `0..123`, since `0..51 degC`
-leaves a legacy board as `124..255`.
+see the unbiased encoding. Only a wrap can land in `0..123`, since `0..51 degC` leaves a legacy
+board as `124..255`.
+
+```c
+raw >= 124 ? raw - 124 : raw + 132
+```
+
+**Why the constant is 124 and not 125.** The bias in counts is `49 / 0.39216 = 124.949`, not an
+integer, and the board **truncates**. Wire byte `w` therefore stands for a 0.39 degC bucket, and
+the constant decides where inside that bucket the de-bias lands:
+
+| true degC | wire | `- 125` | `- 124` |
+| --- | --- | --- | --- |
+| 0.00 | 124 | 0.00 (+0.00) | 0.00 (+0.00) |
+| 18.30 | 171 | 18.04 (-0.26) | 18.43 (+0.13) |
+| 25.00 | 188 | 24.71 (-0.29) | 25.10 (+0.10) |
+| 40.00 | 226 | 39.61 (**-0.39**) | 40.00 (+0.00) |
+| 60.00 | 21 | 59.61 (**-0.39**) | 60.00 (+0.00) |
+| 100.00 | 123 | 99.61 (**-0.39**) | 100.00 (+0.00) |
+
+Swept across the range, `- 125` errs `-0.412..0.000 degC` and `- 124` errs `-0.020..+0.372`. For
+an arbitrary reading that is 0.04 degC of mean error and would not justify a change on its own.
+It matters because the gain is `100/255`, so **the temperatures the fault logic keys on land on
+exact counts** - 40 degC is 102, 60 degC is 153, 100 degC is 255 - and `- 125` is a full count
+low at every one of them. With `- 124` the 0 degC floor, the 60 degC `CAN2_TEMP_HIGH` limit and
+the 100 degC ceiling all decode exactly, and the over-temperature trip moves from ~60.4 degC to
+~60.0 degC.
+
+`- 124` is also a **bijection**: the 256 wire values map to 256 distinct counts, so nothing
+collides and `255` is reachable. `- 125` mapped three wire values onto `0` and could never
+produce `255`, which is why `THERM_SAT_HIGH` needed a `#if` on `THERM_LEGACY_DEBIAS`. It does
+not any more: `255` is the ceiling in both the legacy and the reflashed encoding.
+
+What the board threw away is **not** recoverable. Byte 123 means *somewhere in
+`[99.63, 100.00] degC`* and no arithmetic here narrows that; the 0.39 degC of resolution is gone
+until the boards are reflashed. The constant fixes only the systematic bias sitting on top of it,
+which happened to be the same size again.
 
 **This is the operating state, not a short-lived stopgap.** The upstream fix
 ([stm_PCB-Cells#13](https://github.com/Eko-Energia/stm_PCB-Cells/pull/13)) was closed unmerged
@@ -484,9 +518,11 @@ than a reading. The two ends are not symmetric:
 | end | de-biased | on a direct CAN2 trace | behaviour |
 | --- | --- | --- | --- |
 | floor | `0` | `-0.37 degC` (wire 124) | **fails dangerous** - a dead sensor reads cold for ever, so that cell has no thermal protection |
-| ceiling | `254` | `-0.76 degC` (wire 123) | fails safe - raises code 2, whether the cause is a short or a real event |
+| ceiling | `255` | `-0.76 degC` (wire 123) | fails safe - raises code 2, whether the cause is a short or a real event |
 
 `THERM_Task` counts thermistors pinned at either end and raises code 12 against the worst one.
+The test is `>= THERM_SAT_HIGH` / `<= THERM_SAT_LOW`, not equality, so a pinned sensor stays
+detected if the encoding or those ends ever move again.
 The gate is `thermMiss == 0`, so a module that has never transmitted stays code 3 and its
 all-zero windows are not mistaken for nine floored sensors.
 

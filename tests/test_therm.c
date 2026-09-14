@@ -295,10 +295,10 @@ TEST(a_floored_thermistor_is_reported_instead_of_silently_reading_cold)
 TEST(a_saturated_thermistor_is_reported_alongside_the_over_temperature)
 {
     setup();
-    /* 254 is what wire byte 123 de-biases to: the lookup's 100 degC ceiling. */
-    feedAllExcept(211u, 40u, 254u, 10);
+    /* 255 is what wire byte 123 de-biases to: the lookup's 100 degC ceiling. */
+    feedAllExcept(211u, 40u, 255u, 10);
     CHECK_EQ(THERM_SaturatedCount(), 1u);
-    CHECK_EQ(THERM_MaxRaw(), 254u);                /* still the hottest: may be real */
+    CHECK_EQ(THERM_MaxRaw(), 255u);                /* still the hottest: may be real */
     CHECK_EQ(THERM_MaxModule(), 1u);
     CHECK_EQ(THERM_MaxTherm(), 1u);
 
@@ -334,7 +334,7 @@ TEST(the_ceiling_is_reported_in_preference_to_a_floor)
             if ((id % 10u) == 0u) { continue; }
             uint8_t v = 40u;
             if (id == 211u) { v = 0u; }
-            if (id == 279u) { v = 254u; }
+            if (id == 279u) { v = 255u; }
             THERM_OnFrame(id, v);
         }
         THERM_Task();

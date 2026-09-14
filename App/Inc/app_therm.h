@@ -6,13 +6,15 @@
 #define THERM_MODULES     (7u)
 #define THERM_PER_MODULE  (9u)
 
-/* PCBCells boards send raw = (degC + 49) / 0.39216 and wrap above 51 degC.
+/* PCBCells boards send raw = trunc((degC + 49) / 0.39216) and wrap above 51 degC.
  * CAN_App_OnRx2 undoes both, giving the (0.39216, 0) the databases specify.
+ * The bias is 124.949 counts, and the board truncates, so subtracting 124 lands
+ * inside the bucket the wire byte stands for: 0, 60 and 100 degC - the ends the
+ * fault logic keys on - decode exactly. Spec 6.0 has the full comparison.
  * Set to 0 only when the boards are reflashed: a corrected byte de-biased
  * twice is wrong, and nothing detects the mismatch at runtime. */
 #define THERM_LEGACY_DEBIAS  (1)
-#define THERM_LEGACY_BIAS    (125u)   /* 49 degC / 0.39216, rounded */
-#define THERM_LEGACY_LOWEST  (124u)   /* what a legacy board sends for 0 degC */
+#define THERM_LEGACY_BIAS    (124u)
 
 void THERM_Init(EH_HandleTypeDef *eh);
 

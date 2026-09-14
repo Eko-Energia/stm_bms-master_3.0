@@ -25,14 +25,12 @@ _Static_assert(CAN2_FILTER_BANK_BASE == CAN_SLAVE_START_FILTER_BANK,
                "CAN2 filters must start at the slave filter boundary");
 
 #if THERM_LEGACY_DEBIAS
-/* 0..51 degC leaves a legacy board as 124..255; only a wrap lands in 0..123. */
+/* uint8 arithmetic is mod 256, so one subtract undoes the bias and the wrap
+ * together: 124..255 become 0..131, and the wrapped 0..123 become 132..255.
+ * Bijective, so no wire value collides and 255 is reachable. */
 static uint8_t debiasLegacyTherm(uint8_t raw)
 {
-    if (raw < THERM_LEGACY_LOWEST) {
-        return (uint8_t)(raw + (256u - THERM_LEGACY_BIAS));  /* wrapped: add the 256 back */
-    }
-    /* 124 de-biases to -1, so floor it at zero rather than wrapping round. */
-    return (raw > THERM_LEGACY_BIAS) ? (uint8_t)(raw - THERM_LEGACY_BIAS) : 0u;
+    return (uint8_t)(raw - THERM_LEGACY_BIAS);
 }
 #else
 #define debiasLegacyTherm(raw) (raw)

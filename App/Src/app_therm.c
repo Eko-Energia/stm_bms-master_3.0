@@ -13,11 +13,7 @@
  * measured - open or shorted. The floor is the dangerous one: a dead sensor
  * reads cold for ever and nothing else would say so. */
 #define THERM_SAT_LOW     (0u)
-#if THERM_LEGACY_DEBIAS
-#define THERM_SAT_HIGH    (254u)   /* wire 123 de-biased; a legacy board cannot reach 255 */
-#else
 #define THERM_SAT_HIGH    (255u)
-#endif
 #define THERM_SAT_FLOOR   (0u)
 #define THERM_SAT_CEILING (1u)
 
@@ -139,7 +135,9 @@ void THERM_Task(void)
                that never transmitted, whose zero windows would read as a floor. */
             if (thermMiss[p][t] == 0u) {
                 const uint8_t v = thermFiltered[p][t];
-                if (v == THERM_SAT_HIGH || v == THERM_SAT_LOW) {
+                /* Bounded rather than equal: a pinned sensor stays detected
+                   if the encoding or these ends ever move. */
+                if (v >= THERM_SAT_HIGH || v <= THERM_SAT_LOW) {
                     /* Ceiling wins: it is the end that can also be real. */
                     if (satCount == 0u || (v == THERM_SAT_HIGH && satDir == THERM_SAT_FLOOR)) {
                         satModule = (uint8_t)(p + 1u);
