@@ -544,12 +544,23 @@ this module and the TLV walk reappears inside the transport, tangled with DMA st
 
 ### 7.3 Transport
 
-A USART line error - framing, noise, overrun - aborts the DMA reception, so
-`HAL_UART_ErrorCallback` must re-arm it or the link stays deaf. The callback
-latches the error bits and returns; `JK_Task` consumes them, because
-`EH_reportEx` walks the scheduler and must not run against the superloop. Code 5
-then carries kind 1 with the USART bits, separating a broken wire from a short
-frame - a length alone cannot, since it spans the whole 0-255 range.
+`DE` and `/RE` are **one net** on this board, so driver and receiver switch
+together. That shapes both ends of a transmission - see [bmsJk.md](bmsJk.md).
+
+Before transmitting, the SN65HVD72 takes up to **9 us** to enable its driver
+against an 8.68 us bit time, so `sendRequest` waits for it before handing the
+bytes over. In `JK_Task`, never in an ISR. Releasing needs no such hold: disable
+is 0.4 us max.
+
+Releasing does switch the receiver on exactly as the line settles from driven to
+biased, and that edge frames as a spurious byte. A line error aborts the DMA, so
+`HAL_UART_ErrorCallback` must clear it and re-arm or the reply still arriving is
+lost and the link stays deaf. The callback latches and returns; `JK_Task`
+consumes it, because `EH_reportEx` walks the scheduler and must not run against
+the superloop. One glitch per turnaround is absorbed; past `JK_LINE_ERR_LIMIT`
+the poll fails and code 5 carries kind 1 with the USART bits, separating a broken
+wire from a short frame - a length alone cannot, since it spans the whole 0-255
+range.
 
 Non-blocking state machine, so the CAN scheduler keeps exact cadence:
 
@@ -952,6 +963,9 @@ that exclusion.
 | ADC calibration constants | `28.3626` divider and `2108` offset / `5÷2` current gain ship as named defines marked uncalibrated, and are corrected at bring-up step 3. They live in `App/Inc/bms_calib.h` - see section 5.3. |
 | Current sensor calibration is for the wrong part | The fitted sensor is a Tamura **L01Z300S05**, +/-300 A, 5 V ratiometric, `Vcc/2` at 0 A. The `2108` offset and 4 counts/A reference fit a **+/-150 A part read against a 5 V reference**; this MCU's reference is 3.3 V. Unmeasurable while the sensor is unplugged - it simply clamps - but once connected it either invents current or hides it. One zero-current ADC read on PC1 decides which: `~2108` means a divider is fitted and only the gain is wrong, `~3102` means both are. |
 | CAN2 frames are sampled, not aggregated | The boards send every 200 ms; `THERM_Task` samples at 1 Hz, so four of every five frames are dropped. The 10 s window and the 3 s silence timeout are unaffected. Accumulating sum and count in `THERM_OnFrame` and averaging per tick would use all of them (+63 B RAM, one short critical section) and would make `thermCount` a link-quality measure - today a module delivering 1 frame in 5 reads as healthy. Not done: the gain is ~2.2x less noise on a signal whose limit has a 3 degC hysteresis band. |
+| JK RS485 receive line idles LOW | **Open, hardware.** `PA10` reads 0 with the bus quiet; it must idle high. `R12` pulls it to 3V3 and the SN65HVD72 is failsafe, so a low means the receiver is decoding a valid differential 0 - the signature of `A`/`B` inverted between `J3` and the converter. The labels are not consistent between vendors, so a cable correct for a USB-RS485 tool can be inverted here. Not fixable in firmware: `A`/`B` are past the transceiver, and the F1 has no `RXINV`. Test after swapping: `GPIOA->IDR` bit 10 must read 1. |
+| `DE`/`/RE` are one net, firmware drives two pins | Untraced which of PC4/PC5 is connected. Harmless today because the same level is written to both, but driving them apart would short two push-pull outputs. |
+| JK frame assembly | Not implemented. All five reference readers accumulate across reads and match on `0x4E` rather than assuming one read is one frame. Ours assumes a single idle burst carries the whole reply. |
 | `HVIL`, fan, radio, watchdog, bus-off recovery | Deferred by decision - section 1. |
 
 ## 12. Verification

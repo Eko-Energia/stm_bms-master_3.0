@@ -55,10 +55,40 @@ JK_RECEIVING
 ```
 
 Poll rate **1000 ms** (`JK_POLL_MS`), timeout **100 ms** (`JK_TIMEOUT_MS`, against a worst-case
-29.4 ms response at 115200 baud). Command `0x01` (activate) is sent once at startup and again
-only after the BMS is suspected asleep; otherwise command `0x06` (read all) is sent. Three
-consecutive failures (`JK_FAIL_LIMIT`) zero the published payload rather than hold stale cell
-voltages, and set `needActivation` so the next poll re-activates the link.
+29.4 ms response at 115200 baud). **Every poll is `0x06` read-all.** `0x01` activate is never
+sent: no working implementation uses it, and waiting for a reply the BMS does not owe deadlocks
+the link - the read is then never reached, and a timeout that re-arms activation makes the stall
+permanent. Nothing gates the retry, so the same read goes out every poll and the first good frame
+restores the link however long it has been down.
+
+Three consecutive failures (`JK_FAIL_LIMIT`) zero the published payload rather than hold stale
+cell voltages.
+
+A frame carrying **no data TLVs is rejected by the decoder**: every field is conditional, so an
+empty but structurally valid frame would decode as an all-zero `JK_Data_t` and publish 0 % SOC
+with 21 cells at 0 mV as healthy.
+
+## RS485 turnaround
+
+`DE` and `/RE` are **one net** on this board (`Rs485_TxRxEN`), so the driver and the receiver
+switch together. Two consequences, both handled in `app_jk.c`:
+
+**Before transmitting**, the SN65HVD72 takes up to **9 us** to enable its driver, against an
+8.68 us bit time at 115200. Handing the bytes to the DMA immediately puts the start bit on a
+driver that is still turning on, and the far end sees a corrupt frame. `sendRequest` waits for
+the driver first - in `JK_Task`, never in an ISR.
+
+**After transmitting**, releasing needs no hold: driver disable is 0.4 us max, and the stop bit is
+sampled at its midpoint well before `TC` fires. The 3.5 bit time figure quoted for RS485 is the
+Modbus RTU inter-frame gap, which delimits frames by silence; this protocol has an explicit `0x68`
+end flag and a length field.
+
+Releasing does switch the receiver on at the instant the line settles from driven to biased, and
+that edge frames as a spurious byte. A line error aborts the DMA, so the reply still arriving
+would be lost. `JK_OnUartError` clears the flag, re-arms and keeps listening, with the response
+timeout as the backstop; errors past `JK_LINE_ERR_LIMIT` are reported as code 5 with kind 1.
+
+## Timeout race
 
 A timeout racing the ISR's `SENDING -> RECEIVING` transition is closed with a compare-and-swap
 on `state`: the task's timeout write only commits if `state` is still `JK_SENDING` at that
@@ -72,7 +102,7 @@ while its RX DMA is live.
 | 0 | STX | `0x4E 0x57` |
 | 2 | LENGTH | 2 bytes, big-endian, = total length - 2 (includes itself and the checksum) |
 | 4 | Terminal ID | 4 bytes, `00 00 00 00` |
-| 8 | Command word | `0x01` activate, `0x06` read all |
+| 8 | Command word | `0x01` activate, `0x06` read all - this firmware only ever sends `0x06` |
 | 9 | Frame source | `0x03` = PC upper computer |
 | 10 | Transmission type | `0x00` request, `0x01` reply, `0x02` **unsolicited** |
 | 11 | Payload | TLV stream: identifier byte + data, per a table-driven length map |

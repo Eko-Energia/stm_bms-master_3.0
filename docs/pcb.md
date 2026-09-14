@@ -86,7 +86,11 @@ The PWM behavior is described in [pwmGeneration.md](pwmGeneration.md).
 
 This `.ioc` lists `USART1` only. `PA9`/`PA10` are the configured UART pins, used as the JK BMS
 RS485 link over DMA (`DMA1_Channel4` TX, `DMA1_Channel5` RX), 115200 8N1. The labels `RS_DIR` and
-`RE_DIR` are GPIO outputs on PC4 and PC5 that drive the SN65HVD72 transceiver's `DE`/`/RE` pins.
+`RE_DIR` are GPIO outputs on PC4 and PC5 for the SN65HVD72's `DE`/`/RE` pins. **The schematic ties
+`DE` and `/RE` to one net** (`Rs485_TxRxEN`), so the board has a single direction control, not two:
+HIGH transmits, LOW listens. The firmware writes the same level to both pins, which is consistent
+with one net but means one of PC4/PC5 is probably not connected - untraced. Driving them to
+opposite levels would put two push-pull outputs on one net.
 `USART2` is not assigned in this `.ioc` at all - `PA2`/`PA3` are not available for JK
 communication. See [bmsJk.md](bmsJk.md) for the transport state machine and frame format.
 
