@@ -25,7 +25,6 @@ static volatile JK_State_e state;
 static uint32_t   lastPollMs;
 static uint32_t   requestMs;
 static uint8_t    failCount;
-static bool       needActivation;
 static bool       linkValid;
 static uint8_t    pendingCmd;          /* command of the request in flight */
 static JK_Data_t  data;
@@ -39,6 +38,7 @@ static volatile uint16_t rxLen;
 static volatile uint8_t  rxReady;
 static volatile uint8_t  lineErrBits;
 static volatile uint8_t  lineErrPending;
+static volatile uint8_t  lineErrCount;   /* line errors within the current poll */
 
 static void setDirection(GPIO_PinState de, GPIO_PinState re)
 {
@@ -49,6 +49,14 @@ static void setDirection(GPIO_PinState de, GPIO_PinState re)
 /* Code 5's second payload byte: a short frame and a wiring fault are both
    "invalid frame", and the reason byte alone cannot separate them because a
    length occupies the whole 0-255 range. */
+/* A turnaround glitch is one error per poll. Many more is a real line fault, and
+   re-arming forever would spin the ISR. */
+#define JK_LINE_ERR_LIMIT (4u)
+
+/* Comfortably past the transceiver's 9 us worst-case driver-enable time at
+   72 MHz, whatever the compiler makes of the loop. */
+#define JK_DE_SETTLE_LOOPS (300u)
+
 #define JK_REASON_FRAME   (0u)   /* detail = received length */
 #define JK_REASON_LINE    (1u)   /* detail = USART error bits: PE 1, NE 2, FE 4, ORE 8 */
 
@@ -86,12 +94,12 @@ static uint8_t endFailedPoll(void)
     return failCount;
 }
 
-/* Spec 7.3: only three consecutive failures raise code 4, and only a timeout
-   re-arms 0x01 - activation exists for a BMS that has gone to sleep. */
+/* Spec 7.3: only three consecutive failures raise code 4. The next poll retries
+   the same read - nothing gates it, so the link recovers on the first good
+   frame however long it has been down. */
 static void onTimeout(void)
 {
     const uint8_t failures = endFailedPoll();
-    needActivation = true;
     if (failures >= JK_FAIL_LIMIT) { report(BMS_ERR_JK_COMMS_TIMEOUT, failures); }
 }
 
@@ -108,8 +116,20 @@ static void sendRequest(uint32_t nowMs, uint8_t cmd)
     (void)JKP_BuildRequest(request, cmd);
     pendingCmd = cmd;
     setDirection(DE_ACTIVE, RE_MUTED);
+
+    /*
+     * SN65HVD72 driver enable is up to 9 us with the receiver disabled, and one
+     * bit at 115200 is 8.68 us. Transmitting immediately puts the start bit on a
+     * driver that is still turning on, so the far end sees a corrupt frame and
+     * never answers. Wait for the driver before handing the bytes over.
+     *
+     * Task context, not an ISR, and one poll per second: the cost is noise.
+     */
+    for (volatile uint32_t i = 0u; i < JK_DE_SETTLE_LOOPS; i++) { }
+
     rxReady = 0u;
     rxLen = 0u;
+    lineErrCount = 0u;
     state = JK_SENDING;
     requestMs = nowMs;
     if (HAL_UART_Transmit_DMA(uart, request, JKP_REQUEST_LEN) != HAL_OK) {
@@ -125,17 +145,19 @@ void JK_Init(UART_HandleTypeDef *huart, EH_HandleTypeDef *eh)
     lastPollMs = 0u - JK_POLL_MS;   /* first call is immediately due; wrap-safe */
     requestMs = 0u;
     failCount = 0u;
-    needActivation = true;                 /* activate once at startup */
     linkValid = false;
     pendingCmd = JKP_CMD_READ_ALL;
     rxReady = 0u;
     rxLen = 0u;
     lineErrPending = 0u;
     lineErrBits = 0u;
+    lineErrCount = 0u;
     memset(&data, 0, sizeof data);
     setDirection(DE_IDLE, RE_LISTENING);
 }
 
+/* Releasing needs no hold: SN65HVD72 driver disable is 0.4 us max, far inside
+   one 8.68 us bit. */
 void JK_OnTxComplete(void)
 {
     if (state != JK_SENDING) { return; }
@@ -144,14 +166,34 @@ void JK_OnTxComplete(void)
     (void)HAL_UARTEx_ReceiveToIdle_DMA(uart, rxBuf, JKP_RX_BUF_LEN);
 }
 
-/* ISR context, so this latches and returns: EH_reportEx walks the scheduler and
-   must not run against the superloop. JK_Task consumes it. */
+/*
+ * ISR context. A line error aborts the DMA, so re-arm or the reply is lost.
+ *
+ * DE and /RE are one net on this board, so releasing the bus switches the
+ * receiver on at the same instant - exactly when the line settles from driven
+ * to biased. That edge frames as a spurious byte on nearly every turnaround.
+ * Discarding it and listening again costs nothing; ending the poll on it loses
+ * a reply that was still arriving. The response timeout stays the backstop.
+ *
+ * Reporting is left to JK_Task: EH_reportEx walks the scheduler and must not
+ * run against the superloop.
+ */
 void JK_OnUartError(uint32_t errorBits)
 {
     if (uart == NULL) { return; }
-    (void)HAL_UART_AbortReceive(uart);
+
     lineErrBits = (uint8_t)(errorBits & 0xFFu);
-    lineErrPending = 1u;
+    if (lineErrCount < 0xFFu) { lineErrCount++; }
+
+    if (state != JK_RECEIVING || lineErrCount > JK_LINE_ERR_LIMIT) {
+        (void)HAL_UART_AbortReceive(uart);
+        lineErrPending = 1u;          /* give up on this poll; JK_Task reports */
+        return;
+    }
+
+    __HAL_UART_CLEAR_FEFLAG(uart);    /* reads SR then DR: clears the error and drops the byte */
+    (void)HAL_UART_AbortReceive(uart);
+    (void)HAL_UARTEx_ReceiveToIdle_DMA(uart, rxBuf, JKP_RX_BUF_LEN);
 }
 
 void JK_OnRxEvent(uint16_t size)
@@ -169,7 +211,8 @@ void JK_Task(uint32_t nowMs)
     if (lineErrPending != 0u) {
         lineErrPending = 0u;
         const uint8_t bits = lineErrBits;
-        /* Outside an exchange the abort is enough; the next poll re-arms. */
+        /* Only reported once the errors outlast JK_LINE_ERR_LIMIT: a single
+           turnaround glitch per poll is absorbed in the ISR and never gets here. */
         if (state == JK_RECEIVING) {
             (void)endFailedPoll();
             reportFrameInvalid(bits, JK_REASON_LINE);
@@ -182,21 +225,12 @@ void JK_Task(uint32_t nowMs)
             const uint16_t len = rxLen;
             JK_Data_t decoded;
             if (JKP_Decode(rxBuf, len, &decoded)) {
-                if (pendingCmd == JKP_CMD_ACTIVATE) {
-                    /* An activation reply is a well-formed frame with no data
-                       TLVs: it decodes all-zero. Publishing it would put 0 %
-                       SOC and 0 mV cells on the bus as valid readings, and
-                       clear the timeout fault, at every boot and reconnect. */
-                    needActivation = false;
-                } else {
-                    data = decoded;
-                    linkValid = true;
-                    failCount = 0u;
-                    needActivation = false;
-                    if (ehandler != NULL) {
-                        EH_clear(ehandler, BMS_ERR_JK_COMMS_TIMEOUT);
-                        EH_clear(ehandler, BMS_ERR_JK_FRAME_INVALID);
-                    }
+                data = decoded;
+                linkValid = true;
+                failCount = 0u;
+                if (ehandler != NULL) {
+                    EH_clear(ehandler, BMS_ERR_JK_COMMS_TIMEOUT);
+                    EH_clear(ehandler, BMS_ERR_JK_FRAME_INVALID);
                 }
                 setDirection(DE_IDLE, RE_LISTENING);
                 state = JK_IDLE;
@@ -225,7 +259,7 @@ void JK_Task(uint32_t nowMs)
     }
 
     if (Timing_Due(nowMs, &lastPollMs, JK_POLL_MS)) {
-        sendRequest(nowMs, needActivation ? JKP_CMD_ACTIVATE : JKP_CMD_READ_ALL);
+        sendRequest(nowMs, JKP_CMD_READ_ALL);
     }
 }
 

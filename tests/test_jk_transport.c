@@ -81,14 +81,25 @@ static void timeout(uint32_t now)
     JK_Task(now + 150u);            /* past the 100 ms timeout */
 }
 
-TEST(the_first_exchange_sends_the_activation_command)
+/* Byte-for-byte the request esphome-jk-bms and jk-bms_grafana send, and the
+   only command Bartek's verified-working reader ever needed. 0x01 activation is
+   not sent: no working implementation uses it, and waiting for a reply the BMS
+   never owes deadlocked the link. */
+TEST(every_poll_is_a_read_all_and_matches_the_reference_implementations)
 {
     setup();
     Fake_SetTick(0u);
     JK_Task(0u);
     uint8_t sent[JKP_REQUEST_LEN];
     CHECK_EQ(Fake_LastUartTx(sent, sizeof sent), JKP_REQUEST_LEN);
-    CHECK_EQ(sent[8], JKP_CMD_ACTIVATE);
+
+    static const uint8_t expect[21] = {
+        0x4Eu, 0x57u, 0x00u, 0x13u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x06u, 0x03u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+        0x68u, 0x00u, 0x00u, 0x01u, 0x29u
+    };
+    CHECK_EQ((int)JKP_REQUEST_LEN, 21);
+    for (uint8_t i = 0u; i < 21u; i++) { CHECK_EQ(sent[i], expect[i]); }
 }
 
 TEST(transmit_asserts_the_driver_and_mutes_the_receiver)
@@ -162,24 +173,40 @@ TEST(three_timeouts_raise_the_comms_fault_and_zero_the_data)
     CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
-TEST(a_timeout_retries_with_activation_first)
+/* Nothing gates the retry, so the link cannot deadlock however long it is down:
+   the same read goes out every poll and the first good frame restores it. */
+TEST(a_timeout_retries_the_same_read_and_never_gates_recovery)
 {
     setup();
     uint8_t reply[64];
     const uint16_t n = makeSocResponse(reply, 60u);
     exchange(0u, reply, n);
-    exchange(1000u, reply, n);
+    CHECK(JK_Valid());
 
-    Fake_SetTick(2000u);
-    JK_Task(2000u);
-    JK_OnTxComplete();
-    JK_Task(2150u);                               /* timeout */
+    timeout(1000u);
+    timeout(2000u);
+    timeout(3000u);                               /* past JK_FAIL_LIMIT: code 4 stands */
+    CHECK(!JK_Valid());
+    bool sawTimeout = false;
+    for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].errorCode == BMS_ERR_JK_COMMS_TIMEOUT) { sawTimeout = true; }
+    }
+    CHECK(sawTimeout);
 
     Fake_Reset();
-    JK_Task(3000u);
+    Fake_SetTick(4000u);
+    JK_Task(4000u);                               /* the retry goes out */
     uint8_t sent[JKP_REQUEST_LEN];
     Fake_LastUartTx(sent, sizeof sent);
-    CHECK_EQ(sent[8], JKP_CMD_ACTIVATE);          /* the BMS may have gone to sleep */
+    CHECK_EQ(sent[8], JKP_CMD_READ_ALL);          /* still the read, not a gate */
+
+    /* and answering that very poll is enough - no activation in between */
+    Fake_QueueUartRx(reply, n);
+    JK_OnTxComplete();
+    JK_OnRxEvent(n);
+    JK_Task(4000u);
+    CHECK(JK_Valid());
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 TEST(a_corrupt_response_raises_frame_invalid_not_timeout)
@@ -439,33 +466,49 @@ TEST(a_frame_error_does_not_re_arm_activation)
     CHECK_EQ(sent[8], JKP_CMD_READ_ALL);
 }
 
-/* A USART line error - framing, noise, overrun - aborts the DMA reception. The
-   module must re-arm and say WHICH kind of failure it was, or a broken wire is
-   indistinguishable from a silent BMS. */
-static void lineError(uint32_t now, uint32_t bits)
-{
-    Fake_SetTick(now);
-    JK_Task(now);                   /* the poll goes out */
-    JK_OnTxComplete();              /* receiver armed */
-    Fake_SetUartError(bits);
-    JK_OnUartError(bits);           /* HAL_UART_ErrorCallback would call this */
-    JK_Task(now);
-}
 
-TEST(a_line_error_is_reported_as_a_line_error_not_a_short_frame)
+/* One glitch per turnaround is expected on this board: DE and /RE share a net,
+   so the receiver switches on exactly as the bus settles from driven to biased.
+   It must be absorbed, not allowed to end the exchange. */
+TEST(a_single_line_error_is_absorbed_and_the_reply_still_arrives)
 {
     setup();
-    const uint32_t before = Fake_UartAbortCount();
-    lineError(0u, 0x04u);                       /* HAL_UART_ERROR_FE */
+    uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 60u);
 
-    CHECK(Fake_UartAbortCount() > before);      /* the dead DMA was torn down */
+    Fake_SetTick(0u);
+    JK_Task(0u);                       /* poll goes out */
+    JK_OnTxComplete();                 /* bus released, receiver armed */
+
+    /* The reply is already on its way when the turnaround glitch lands, so the
+       re-arm inside the error handler is what catches it. */
+    Fake_SetUartError(0x04u);
+    Fake_QueueUartRx(reply, n);
+    JK_OnUartError(0x04u);       /* re-arms; the fake copies the queued reply in */
+    JK_OnRxEvent(n);             /* app.c dispatches this on hardware */
+    JK_Task(0u);
+
+    CHECK(JK_Valid());
+    CHECK_EQ(JK_Data()->soc, 60u);
+    CHECK_EQ(EH_getActiveCount(&eh), 0u);        /* and nothing is reported */
+}
+
+TEST(persistent_line_errors_are_still_reported)
+{
+    setup();
+    Fake_SetTick(0u);
+    JK_Task(0u);
+    JK_OnTxComplete();
+    Fake_SetUartError(0x04u);
+    for (int i = 0; i < 8; i++) { JK_OnUartError(0x04u); }   /* past JK_LINE_ERR_LIMIT */
+    JK_Task(0u);
+
     CHECK_EQ(EH_getActiveCount(&eh), 1u);
     const EH_ActiveError *e = &eh.activeErrors[0];
     CHECK_EQ(e->errorCode, BMS_ERR_JK_FRAME_INVALID);
     CHECK_EQ(e->severity, ERROR_SEVERITY_WARNING);
     CHECK_EQ(e->specificDataLen, 2u);
-    CHECK_EQ(e->specificData[0], 0x04u);        /* the USART error bits */
-    CHECK_EQ(e->specificData[1], 1u);           /* kind 1 = line, not a frame length */
+    CHECK_EQ(e->specificData[0], 0x04u);
+    CHECK_EQ(e->specificData[1], 1u);            /* kind 1 = line */
 }
 
 TEST(a_short_frame_still_reports_as_a_frame_not_a_line_error)
@@ -493,29 +536,32 @@ TEST(a_line_error_outside_an_exchange_is_absorbed_silently)
     CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
-TEST(the_link_recovers_after_a_line_error)
+TEST(the_link_recovers_after_persistent_line_errors)
 {
     setup();
-    lineError(0u, 0x04u);
+    Fake_SetTick(0u);
+    JK_Task(0u);
+    JK_OnTxComplete();
+    Fake_SetUartError(0x04u);
+    for (int i = 0; i < 8; i++) { JK_OnUartError(0x04u); }
+    JK_Task(0u);
     CHECK(EH_getActiveCount(&eh) > 0u);
 
-    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
     uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 60u);
-    exchange(1000u, ack, a);
-    exchange(2000u, reply, n);
+    exchange(1000u, reply, n);
     CHECK(JK_Valid());                          /* a good frame clears it */
     CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
 int main(void)
 {
-    RUN(the_first_exchange_sends_the_activation_command);
+    RUN(every_poll_is_a_read_all_and_matches_the_reference_implementations);
     RUN(transmit_asserts_the_driver_and_mutes_the_receiver);
     RUN(transmission_complete_turns_the_transceiver_around);
     RUN(a_valid_response_is_decoded_and_marks_the_link_up);
     RUN(polling_settles_to_read_all_at_one_hertz);
     RUN(three_timeouts_raise_the_comms_fault_and_zero_the_data);
-    RUN(a_timeout_retries_with_activation_first);
+    RUN(a_timeout_retries_the_same_read_and_never_gates_recovery);
     RUN(a_corrupt_response_raises_frame_invalid_not_timeout);
     RUN(a_response_arriving_just_after_the_deadline_is_ignored);
     RUN(an_unsolicited_frame_with_no_request_outstanding_does_not_corrupt_state);
@@ -524,10 +570,11 @@ int main(void)
     RUN(a_failed_transmit_start_is_reported_and_counted);
     RUN(an_activation_reply_is_never_published_as_data);
     RUN(frame_invalid_is_graded_warning_and_a_timeout_error);
-    RUN(a_line_error_is_reported_as_a_line_error_not_a_short_frame);
+    RUN(a_single_line_error_is_absorbed_and_the_reply_still_arrives);
+    RUN(persistent_line_errors_are_still_reported);
     RUN(a_short_frame_still_reports_as_a_frame_not_a_line_error);
     RUN(a_line_error_outside_an_exchange_is_absorbed_silently);
-    RUN(the_link_recovers_after_a_line_error);
+    RUN(the_link_recovers_after_persistent_line_errors);
     RUN(one_dropped_poll_is_not_a_bus_fault);
     RUN(the_comms_fault_reports_the_post_increment_failure_count);
     RUN(a_frame_error_does_not_re_arm_activation);

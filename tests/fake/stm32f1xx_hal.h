@@ -101,6 +101,8 @@ HAL_StatusTypeDef HAL_CAN_GetRxMessage(CAN_HandleTypeDef *h, uint32_t fifo,
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, const uint8_t *d, uint16_t n);
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *d, uint16_t n);
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h);
+/* Real HAL reads SR then DR, clearing the error and discarding the byte. */
+#define __HAL_UART_CLEAR_FEFLAG(__HANDLE__) do { (void)(__HANDLE__); } while (0)
 uint32_t          HAL_UART_GetError(UART_HandleTypeDef *h);
 void              Fake_SetUartError(uint32_t bits);
 uint32_t          Fake_UartAbortCount(void);
