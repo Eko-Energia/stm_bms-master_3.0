@@ -938,7 +938,7 @@ static void minimalReproducers(void)
       showRepro("R9 unknown identifier truncates the walk, Decode still true", p, sizeof p,
                 "0x88 has no table entry, so SOC=99 and cellCount=21 that follow it are "
                 "lost and published as 0 - the same all-zero hazard spec 7.3 guards "
-                "against for the activation reply"); }
+                "against for an empty payload"); }
 
     { const uint8_t p[] = { 0x85u, 0x63u, 0xC0u };
       showRepro("R10 payload ends mid-TLV, Decode still true", p, sizeof p,

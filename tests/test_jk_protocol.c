@@ -38,15 +38,6 @@ TEST(read_all_request_matches_the_documented_bytes)
     CHECK_EQ(memcmp(req, expect, JKP_REQUEST_LEN), 0);
 }
 
-TEST(activation_request_differs_only_in_command_and_checksum)
-{
-    uint8_t req[JKP_REQUEST_LEN];
-    JKP_BuildRequest(req, JKP_CMD_ACTIVATE);
-    CHECK_EQ(req[8], 0x01u);
-    CHECK_EQ(req[19], 0x01u);
-    CHECK_EQ(req[20], 0x24u);       /* 0x129 - 6 + 1 = 0x124 */
-}
-
 TEST(validate_rejects_malformed_frames)
 {
     uint8_t buf[64];
@@ -521,7 +512,6 @@ TEST(length_field_overrunning_the_buffer_is_rejected)
 int main(void)
 {
     RUN(read_all_request_matches_the_documented_bytes);
-    RUN(activation_request_differs_only_in_command_and_checksum);
     RUN(validate_rejects_malformed_frames);
     RUN(pack_voltage_and_soc_decode_directly);
     RUN(current_offset_encoding_is_negated_to_positive_equals_discharging);

@@ -8,7 +8,6 @@
 #define JKP_CELLS_MAX     (21u)     /* the pack is 21S */
 #define JKP_FRAME_MIN     (20u)     /* header, record number, end flag, checksum */
 
-#define JKP_CMD_ACTIVATE  (0x01u)
 #define JKP_CMD_READ_ALL  (0x06u)
 
 /** Decoded JK state. Scales match the CAN_DB signals so packing is a copy. */

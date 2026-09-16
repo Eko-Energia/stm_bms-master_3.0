@@ -111,13 +111,13 @@ TEST(dump_vectors_for_the_oracle)
         THERM_Task();
     }
 
-    /* The boot poll is JKP_CMD_ACTIVATE and its reply carries no data, so it
-       is acknowledged and discarded; the read-all a second later is what
-       publishes. Same all-zero ack frame the transport test uses. */
+    /* A structurally valid reply carrying no TLVs at all is discarded, not
+       published; the read-all a second later is what reaches the bus. Same
+       empty-payload frame the transport test uses. */
     uint8_t ack[20];
     memset(ack, 0, sizeof ack);
     ack[0] = 0x4Eu; ack[1] = 0x57u; ack[3] = 0x12u;
-    ack[8] = JKP_CMD_ACTIVATE; ack[10] = 0x01u; ack[15] = 0x68u;
+    ack[8] = JKP_CMD_READ_ALL; ack[10] = 0x01u; ack[15] = 0x68u;
     uint16_t ackSum = 0u;
     for (uint16_t i = 0; i <= 15u; i++) { ackSum = (uint16_t)(ackSum + ack[i]); }
     ack[18] = (uint8_t)(ackSum >> 8); ack[19] = (uint8_t)(ackSum & 0xFFu);
@@ -128,7 +128,7 @@ TEST(dump_vectors_for_the_oracle)
     JK_OnTxComplete();
     JK_OnRxEvent((uint16_t)sizeof ack);
     JK_Task(0u);
-    CHECK(!JK_Valid());                 /* an activation ack is not a reading */
+    CHECK(!JK_Valid());                 /* an empty payload is not a reading */
 
     /* One full JK exchange with a crafted, non-trivial response: negative
        pack current, distinct multi-byte cell voltages, signed temperatures. */

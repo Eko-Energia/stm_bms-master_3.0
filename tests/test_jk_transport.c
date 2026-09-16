@@ -40,15 +40,15 @@ static uint16_t makeSocResponse(uint8_t *buf, uint8_t soc)
     return n;
 }
 
-/* The reply to JKP_CMD_ACTIVATE: a well-formed, checksum-valid frame with an
-   empty TLV payload, so JKP_Decode returns true with an all-zero JK_Data_t. */
-static uint16_t makeActivateAck(uint8_t *buf)
+/* A well-formed, checksum-valid frame carrying no TLVs at all. Structurally
+   perfect, but 0 % SOC with 21 cells at 0 mV is not a measurement. */
+static uint16_t makeEmptyPayloadFrame(uint8_t *buf)
 {
     const uint16_t total = 20u;
     memset(buf, 0, total);
     buf[0] = 0x4Eu; buf[1] = 0x57u;
     buf[2] = (uint8_t)((total - 2u) >> 8); buf[3] = (uint8_t)((total - 2u) & 0xFFu);
-    buf[8] = JKP_CMD_ACTIVATE;
+    buf[8] = JKP_CMD_READ_ALL;
     buf[10] = 0x01u;                        /* transmission type: response */
     buf[15] = 0x68u;                        /* end flag */
     uint16_t sum = 0u;
@@ -82,9 +82,7 @@ static void timeout(uint32_t now)
 }
 
 /* Byte-for-byte the request esphome-jk-bms and jk-bms_grafana send, and the
-   only command Bartek's verified-working reader ever needed. 0x01 activation is
-   not sent: no working implementation uses it, and waiting for a reply the BMS
-   never owes deadlocked the link. */
+   only command Bartek's verified-working reader ever needed. */
 TEST(every_poll_is_a_read_all_and_matches_the_reference_implementations)
 {
     setup();
@@ -127,8 +125,8 @@ TEST(a_valid_response_is_decoded_and_marks_the_link_up)
     uint8_t reply[64];
     const uint16_t n = makeSocResponse(reply, 77u);
 
-    exchange(0u, reply, n);                       /* activation reply */
-    exchange(1000u, reply, n);                    /* first read-all */
+    exchange(0u, reply, n);                       /* first poll */
+    exchange(1000u, reply, n);                    /* second poll */
     CHECK(JK_Valid());
     CHECK_EQ(JK_Data()->soc, 77u);
 }
@@ -200,7 +198,7 @@ TEST(a_timeout_retries_the_same_read_and_never_gates_recovery)
     Fake_LastUartTx(sent, sizeof sent);
     CHECK_EQ(sent[8], JKP_CMD_READ_ALL);          /* still the read, not a gate */
 
-    /* and answering that very poll is enough - no activation in between */
+    /* and answering that very poll is enough - nothing gates the retry */
     Fake_QueueUartRx(reply, n);
     JK_OnTxComplete();
     JK_OnRxEvent(n);
@@ -333,13 +331,13 @@ TEST(a_failed_transmit_start_is_reported_and_counted)
     CHECK(EH_getActiveCount(&eh) > 0u);
 }
 
-TEST(an_activation_reply_is_never_published_as_data)
+TEST(an_empty_payload_frame_is_never_published_as_data)
 {
     setup();
-    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
+    uint8_t ack[32];   const uint16_t a = makeEmptyPayloadFrame(ack);
     uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 77u);
 
-    /* Boot: the activation acknowledgement is not a reading. */
+    /* Boot: a frame with no fields in it is not a reading. */
     exchange(0u, ack, a);
     CHECK(!JK_Valid());
     CHECK_EQ(JK_Data()->soc, 0u);
@@ -348,11 +346,11 @@ TEST(an_activation_reply_is_never_published_as_data)
     CHECK(JK_Valid());
     CHECK_EQ(JK_Data()->soc, 77u);
 
-    /* The link drops, which arms an activation on the next poll. */
+    /* The link drops. */
     timeout(2000u);
     CHECK(!JK_Valid());
 
-    /* Reconnect. The ack must not put 0 % SOC and 0 mV cells on the bus as
+    /* Reconnect. It must not put 0 % SOC and 0 mV cells on the bus as
        healthy: one strike in, the last real reading is still held. */
     exchange(3000u, ack, a);
     CHECK(!JK_Valid());
@@ -377,7 +375,7 @@ TEST(an_activation_reply_is_never_published_as_data)
 TEST(frame_invalid_is_graded_warning_and_a_timeout_error)
 {
     setup();
-    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
+    uint8_t ack[32];   const uint16_t a = makeEmptyPayloadFrame(ack);
     uint8_t reply[64]; uint16_t n = makeSocResponse(reply, 60u);
     exchange(0u, ack, a);
 
@@ -442,7 +440,7 @@ TEST(the_comms_fault_reports_the_post_increment_failure_count)
     CHECK_EQ(eh.activeErrors[0].specificData[0], 3u);
 }
 
-TEST(a_frame_error_does_not_re_arm_activation)
+TEST(a_frame_error_leaves_the_next_poll_a_read_all)
 {
     setup();
     uint8_t reply[64];
@@ -457,8 +455,8 @@ TEST(a_frame_error_does_not_re_arm_activation)
     exchange(2000u, bad, n);
     CHECK(!JK_Valid());
 
-    /* Spec 7.3: 0x01 goes out again only after a timeout. Re-arming it on a
-       framing glitch spends a whole poll on activation and halves the rate. */
+    /* Every poll is the same read, whatever happened to the last one: nothing
+       may spend a poll on anything else and halve the rate. */
     Fake_Reset();
     JK_Task(3000u);
     uint8_t sent[JKP_REQUEST_LEN];
@@ -514,7 +512,7 @@ TEST(persistent_line_errors_are_still_reported)
 TEST(a_short_frame_still_reports_as_a_frame_not_a_line_error)
 {
     setup();
-    uint8_t ack[32];   const uint16_t a = makeActivateAck(ack);
+    uint8_t ack[32];   const uint16_t a = makeEmptyPayloadFrame(ack);
     uint8_t reply[64]; uint16_t n = makeSocResponse(reply, 60u);
     exchange(0u, ack, a);
     reply[n - 1u] ^= 0xFFu;                     /* break the checksum */
@@ -596,7 +594,7 @@ int main(void)
     RUN(polling_continues_across_the_tick_wrap);
     RUN(the_100ms_response_timeout_survives_the_tick_wrap);
     RUN(a_failed_transmit_start_is_reported_and_counted);
-    RUN(an_activation_reply_is_never_published_as_data);
+    RUN(an_empty_payload_frame_is_never_published_as_data);
     RUN(frame_invalid_is_graded_warning_and_a_timeout_error);
     RUN(a_single_line_error_is_absorbed_and_the_reply_still_arrives);
     RUN(persistent_line_errors_are_still_reported);
@@ -605,7 +603,7 @@ int main(void)
     RUN(the_link_recovers_after_persistent_line_errors);
     RUN(one_dropped_poll_is_not_a_bus_fault);
     RUN(the_comms_fault_reports_the_post_increment_failure_count);
-    RUN(a_frame_error_does_not_re_arm_activation);
+    RUN(a_frame_error_leaves_the_next_poll_a_read_all);
     RUN(a_half_transfer_event_does_not_end_the_poll);
     return TEST_SUMMARY();
 }

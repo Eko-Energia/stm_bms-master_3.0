@@ -55,11 +55,10 @@ JK_RECEIVING
 ```
 
 Poll rate **1000 ms** (`JK_POLL_MS`), timeout **100 ms** (`JK_TIMEOUT_MS`, against a worst-case
-29.4 ms response at 115200 baud). **Every poll is `0x06` read-all.** `0x01` activate is never
-sent: no working implementation uses it, and waiting for a reply the BMS does not owe deadlocks
-the link - the read is then never reached, and a timeout that re-arms activation makes the stall
-permanent. Nothing gates the retry, so the same read goes out every poll and the first good frame
-restores the link however long it has been down.
+29.4 ms response at 115200 baud). **Every poll is `0x06` read-all** and the firmware sends no
+other command: none of the five reference implementations activates, and the link runs
+indefinitely on the bench without it. Nothing gates the retry, so the same read goes out every
+poll and the first good frame restores the link however long it has been down.
 
 Three consecutive failures (`JK_FAIL_LIMIT`) zero the published payload rather than hold stale
 cell voltages.
@@ -102,7 +101,7 @@ while its RX DMA is live.
 | 0 | STX | `0x4E 0x57` |
 | 2 | LENGTH | 2 bytes, big-endian, = total length - 2 (includes itself and the checksum) |
 | 4 | Terminal ID | 4 bytes, `00 00 00 00` |
-| 8 | Command word | `0x01` activate, `0x06` read all - this firmware only ever sends `0x06` |
+| 8 | Command word | `0x06` read all - the only command this firmware sends |
 | 9 | Frame source | `0x03` = PC upper computer |
 | 10 | Transmission type | `0x00` request, `0x01` reply, `0x02` **unsolicited** |
 | 11 | Payload | TLV stream: identifier byte + data, per a table-driven length map |

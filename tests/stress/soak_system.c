@@ -790,8 +790,8 @@ static void soakDriveJk(void)
         if (halUartTxCount != jkLastTxSeen) {
             jkLastTxSeen = halUartTxCount;
             jkPhase = 1; jkPhaseAtAbs = soakAbsMs;
-            /* request byte 8 carries the command; 0x01 = activate */
-            soakJkLen = soakBuildJk(soakJkBuf, (halUartTx[8] == 0x01u) ? 0 : 1,
+            /* Every poll is 0x06 read-all, so the reply always carries data. */
+            soakJkLen = soakBuildJk(soakJkBuf, 1,
                                     6850u, (uint8_t)(50u + soakRndBelow(40u)));
         }
         return;

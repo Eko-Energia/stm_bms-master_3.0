@@ -571,7 +571,7 @@ Half-duplex RS485 on USART1 via an SN65HVD72, 115200 8N1. Protocol V2.5
 | 0 | STX | `0x4E 0x57` |
 | 2 | LENGTH | 2 bytes, = total - 2; includes itself and the checksum |
 | 4 | Terminal ID | 4 bytes, `00 00 00 00` default |
-| 8 | Command word | `0x01` activate, `0x03` read single, `0x06` read all - this firmware only ever sends `0x06` |
+| 8 | Command word | `0x03` read single, `0x06` read all - this firmware only ever sends `0x06` |
 | 9 | Frame source | `0x03` = PC upper computer |
 | 10 | Transmission type | `0x00` request, `0x01` reply, `0x02` **unsolicited** |
 | 11 | Payload | TLV stream: identifier byte + data |
@@ -638,13 +638,16 @@ Poll **1 Hz** with a **100 ms** timeout (against a 29.4 ms worst-case response).
 4E 57 00 13 00 00 00 00 06 03 00 00 00 00 00 00 68 00 00 01 29
 ```
 
-**`0x01` activation is never sent.** Three independent implementations agree it is unnecessary:
-`syssi/esphome-jk-bms` and `PurpleAlien/jk-bms_grafana` send exactly the frame above, and
-`Eko-Energia/bmsjk-readingalgo` - the one verified against this pack - reads with `0x03` and a
-register. None activates. Sending it and waiting for a reply the BMS does not owe deadlocks the
-link: the read is never reached, and a timeout that re-arms activation makes the stall permanent.
+**`0x06` read-all is the only command the firmware sends.** Three independent implementations
+agree nothing else is needed: `syssi/esphome-jk-bms` and `PurpleAlien/jk-bms_grafana` send exactly
+the frame above, and `Eko-Energia/bmsjk-readingalgo` - the one verified against this pack - reads
+with `0x03` and a register. Confirmed on the bench: the link holds indefinitely on read-all alone.
 Nothing gates the retry, so the same read goes out every poll and the first good frame restores
 the link however long it has been down.
+
+One case is untested: the JK cold-starting alongside the master. Everything measured so far had
+the JK already powered. A link that is dead only after a full vehicle power cycle, and recovers
+on nothing, is the one symptom that would justify revisiting a wake command.
 
 Three consecutive failures raise `JK_COMMS_TIMEOUT`; frame-level failures raise
 `JK_FRAME_INVALID`.

@@ -103,8 +103,8 @@ static void onTimeout(void)
     if (failures >= JK_FAIL_LIMIT) { report(BMS_ERR_JK_COMMS_TIMEOUT, failures); }
 }
 
-/* Spec 7.3: a per-frame warning, reported at once. A framing glitch is not a
-   sleeping BMS, so it must not re-arm activation and halve the poll rate. */
+/* Spec 7.3: a per-frame warning, reported at once. The next poll retries the
+   same read, so a glitch costs one poll and nothing more. */
 static void onFrameInvalid(uint8_t reason)
 {
     (void)endFailedPoll();
