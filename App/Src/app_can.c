@@ -3,6 +3,7 @@
 #include "app_contactor.h"
 #include "app_jk.h"
 #include "app_therm.h"
+#include "bms_calib.h"
 #include "bms_errors.h"
 #include "CAN_DB.h"
 #include "main.h"
@@ -43,11 +44,14 @@ static uint32_t txFailId;
 static bool     initOk;        /* frame currently reported as blocked, 0 = none */
 
 /* Persistent frame structs: getData packs from these, so nothing is stale. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
 static struct BMSMaster_MasterVoltCurrTemp_t frameMeas;
+#endif
 static struct BMSMaster_JK_Pack_t             frameJkPack;
 static struct BMSMaster_JK_Temp_t             frameJkTemp;
 static struct BMSMaster_JK_CycleStats_t       frameJkCycles;
 
+#if CALIB_SEND_MASTER_MEASUREMENTS
 static void getMeasurements(uint8_t *data, void *ctx)
 {
     (void)ctx;
@@ -58,6 +62,7 @@ static void getMeasurements(uint8_t *data, void *ctx)
     (void)BMSMaster_MasterVoltCurrTemp_pack(data, &frameMeas,
                                             BMSMASTER_MASTERVOLTCURRTEMP_LENGTH);
 }
+#endif
 
 /* One callback for all nine thermistor frames; the context is the 1-based index.
    The frame is the transpose: thermistor y from all seven modules. Written
@@ -162,8 +167,13 @@ bool CAN_App_Init(CAN_HandleTypeDef *hcan1, CAN_HandleTypeDef *hcan2, EH_HandleT
     initOk = initOk && (CAN_Init(hcan1) == HAL_OK);
     initOk = initOk && (CAN_Init(hcan2) == HAL_OK);
 
+    /* Every signal in this frame - voltage, current and temperature alike - is
+       uncalibrated on this board, so it is off by default and the JK carries
+       the pack readings instead. See CALIB_SEND_MASTER_MEASUREMENTS. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
     add(BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID, BMSMASTER_MASTERVOLTCURRTEMP_LENGTH,
         BMSMASTER_MASTERVOLTCURRTEMP_CYCLE_TIME_MS, getMeasurements, NULL);
+#endif
 
     static const uint32_t thermIds[THERM_PER_MODULE] = {
         BMSMASTER_PCBSTHERM1TEMP_FRAME_ID, BMSMASTER_PCBSTHERM2TEMP_FRAME_ID,

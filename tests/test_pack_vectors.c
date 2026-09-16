@@ -151,7 +151,9 @@ TEST(dump_vectors_for_the_oracle)
     CHECK(f != NULL);
     const uint32_t ids[] = {
         BMSMASTER_NODE_FRAME_ID,
+#if CALIB_SEND_MASTER_MEASUREMENTS
         BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID,
+#endif
         BMSMASTER_PCBSTHERM1TEMP_FRAME_ID, BMSMASTER_PCBSTHERM2TEMP_FRAME_ID,
         BMSMASTER_PCBSTHERM3TEMP_FRAME_ID, BMSMASTER_PCBSTHERM4TEMP_FRAME_ID,
         BMSMASTER_PCBSTHERM5TEMP_FRAME_ID, BMSMASTER_PCBSTHERM6TEMP_FRAME_ID,
@@ -164,7 +166,11 @@ TEST(dump_vectors_for_the_oracle)
         BMSMASTER_JK_TEMP_FRAME_ID, BMSMASTER_JK_CYCLESTATS_FRAME_ID
     };
     /* Every frame app_can.c schedules, plus the NODE frame - not a sample. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
     CHECK_EQ(sizeof ids / sizeof ids[0], 20u);
+#else
+    CHECK_EQ(sizeof ids / sizeof ids[0], 19u);
+#endif
     for (size_t k = 0; k < sizeof ids / sizeof ids[0]; k++) {
         uint8_t d[8];
         CHECK(Fake_FindTx(ids[k], d, NULL));

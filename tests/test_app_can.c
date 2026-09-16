@@ -46,12 +46,19 @@ TEST(both_transceivers_leave_standby_before_the_buses_start)
     CHECK_EQ(Fake_PinState(nCAN2_Stby_GPIO_Port, nCAN2_Stby_Pin), GPIO_PIN_RESET);
 }
 
-TEST(nineteen_frames_are_registered_plus_the_node_frame)
+/* 18 scheduled frames, or 19 with the master measurements published. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
+#define EXPECTED_SCHEDULED (19u)
+#else
+#define EXPECTED_SCHEDULED (18u)
+#endif
+
+TEST(every_scheduled_frame_is_registered_plus_the_node_frame)
 {
     setup();
-    CHECK_EQ(CAN_App_Scheduler()->size, 19u);
+    CHECK_EQ(CAN_App_Scheduler()->size, EXPECTED_SCHEDULED);
     EH_init(&eh, &h1, BMSMASTER_NODE_FRAME_ID, CAN_App_Scheduler());
-    CHECK_EQ(CAN_App_Scheduler()->size, 20u);
+    CHECK_EQ(CAN_App_Scheduler()->size, EXPECTED_SCHEDULED + 1u);
 }
 
 /* BMSMaster_END is defined in the database but must never be transmitted. */
@@ -70,7 +77,9 @@ TEST(every_expected_frame_id_appears_on_the_bus)
     setup();
     pump(6000u);
     const uint32_t ids[] = {
+#if CALIB_SEND_MASTER_MEASUREMENTS
         BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID,
+#endif
         BMSMASTER_PCBSTHERM1TEMP_FRAME_ID, BMSMASTER_PCBSTHERM2TEMP_FRAME_ID,
         BMSMASTER_PCBSTHERM3TEMP_FRAME_ID, BMSMASTER_PCBSTHERM4TEMP_FRAME_ID,
         BMSMASTER_PCBSTHERM5TEMP_FRAME_ID, BMSMASTER_PCBSTHERM6TEMP_FRAME_ID,
@@ -82,15 +91,29 @@ TEST(every_expected_frame_id_appears_on_the_bus)
         BMSMASTER_JK_CELLS_17_20_FRAME_ID, BMSMASTER_JK_CELLS_21_FRAME_ID,
         BMSMASTER_JK_TEMP_FRAME_ID, BMSMASTER_JK_CYCLESTATS_FRAME_ID
     };
-    /* All 19 ids, not a sample: a deleted registration must fail this loop.
+    /* Every id, not a sample: a deleted registration must fail this loop.
        BMSMaster_END is deliberately absent - it exists in the database for
        convenience and must never go on the bus. */
-    CHECK_EQ(sizeof ids / sizeof ids[0], 19u);
+    CHECK_EQ(sizeof ids / sizeof ids[0], EXPECTED_SCHEDULED);
     for (size_t i = 0; i < sizeof ids / sizeof ids[0]; i++) {
         CHECK(Fake_TxCountFor(ids[i]) > 0u);
     }
 }
 
+#if !CALIB_SEND_MASTER_MEASUREMENTS
+/* The master's voltage, current and temperature are all uncalibrated on this
+   board, so the frame carrying them is not published at all. */
+TEST(the_measurement_frame_is_never_registered_or_sent)
+{
+    setup();
+    pump(3000u);
+    CHECK_EQ(Fake_TxCountFor(BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID), 0u);
+    for (uint8_t i = 0u; i < CAN_App_Scheduler()->size; i++) {
+        CHECK(CAN_App_Scheduler()->list[i].header.StdId
+              != BMSMASTER_MASTERVOLTCURRTEMP_FRAME_ID);
+    }
+}
+#else
 TEST(the_measurement_frame_runs_at_two_hertz)
 {
     setup();
@@ -119,6 +142,7 @@ TEST(measurements_reach_the_payload)
     /* Current is a little-endian i16 at byte 2, scale 0.1 A - the signed spot check. */
     CHECK_EQ((int16_t)(d[2] | ((uint16_t)d[3] << 8)), ADC_PackDeciamps());
 }
+#endif /* CALIB_SEND_MASTER_MEASUREMENTS */
 
 TEST(the_thermistor_frames_carry_the_transpose)
 {
@@ -331,11 +355,15 @@ TEST(every_wire_value_maps_to_a_distinct_count)
 int main(void)
 {
     RUN(both_transceivers_leave_standby_before_the_buses_start);
-    RUN(nineteen_frames_are_registered_plus_the_node_frame);
+    RUN(every_scheduled_frame_is_registered_plus_the_node_frame);
     RUN(the_end_frame_is_never_registered_or_sent);
     RUN(every_expected_frame_id_appears_on_the_bus);
+#if CALIB_SEND_MASTER_MEASUREMENTS
     RUN(the_measurement_frame_runs_at_two_hertz);
     RUN(measurements_reach_the_payload);
+#else
+    RUN(the_measurement_frame_is_never_registered_or_sent);
+#endif
     RUN(the_thermistor_frames_carry_the_transpose);
     RUN(link_down_jk_frames_carry_zero_payload_on_cadence);
     RUN(can1_filter_admits_only_the_safe_state_ids);

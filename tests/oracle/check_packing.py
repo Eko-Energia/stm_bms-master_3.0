@@ -39,6 +39,14 @@ def _therm_of(frame_id: int) -> int:
     return o if (m & 1) else (10 - o)
 
 
+def _sends_master_measurements() -> bool:
+    """BMSMaster_MasterVoltCurrTemp is off while its three signals are
+    uncalibrated; read the firmware's own switch rather than assume."""
+    text = (HERE.parents[1] / "App" / "Inc" / "bms_calib.h").read_text()
+    m = re.search(r"#define\s+CALIB_SEND_MASTER_MEASUREMENTS\s+\((\d+)\)", text)
+    return bool(m and int(m.group(1)))
+
+
 def _disabled_positions() -> set:
     """(module, thermistor) pairs from THERM_DISABLED_LIST, parsed out of the
     firmware header rather than duplicated here, so editing the list moves the
@@ -91,11 +99,6 @@ EXPECTED = {
         "Node_Execution_Halted": 0,
         "Reserved": 0,
     },
-    0x082: {                                    # BMSMaster_MasterVoltCurrTemp
-        "BMSMaster_MasterBatteryVoltage": 73.1,
-        "BMSMaster_MasterBatteryCurrent": 25.0, # positive: ADC's own signed spot-check
-        "BMSMaste_MasterBatteryTemperatur": 37.0,
-    },
     0x08C: {                                    # BMSMaster_JK_Pack
         "BMSMaster_JK_PackVoltage": 72.56,
         "BMSMaster_JK_PackCurrent": -20.0,      # negative: JK's own signed spot-check
@@ -121,6 +124,13 @@ EXPECTED = {
 }
 for _t in range(1, 10):
     EXPECTED[0x82 + _t] = _therm_expected(_t)
+
+if _sends_master_measurements():
+    EXPECTED[0x082] = {                         # BMSMaster_MasterVoltCurrTemp
+        "BMSMaster_MasterBatteryVoltage": 73.1,
+        "BMSMaster_MasterBatteryCurrent": 25.0, # positive: ADC's own signed spot-check
+        "BMSMaste_MasterBatteryTemperatur": 37.0,
+    }
 
 
 def _mismatch(frame_id: int, name: str, expected, actual) -> bool:

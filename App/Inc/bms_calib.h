@@ -15,6 +15,22 @@
 #define CALIB_CURRENT_NUM     (5)         /* deciamps = (count - offset) * NUM / DEN */
 #define CALIB_CURRENT_DEN     (2)
 
+/*
+ * Whether BMSMaster_MasterVoltCurrTemp goes on CAN1 at all.
+ *
+ * All three of its signals are uncalibrated on this board: the pack divider
+ * reads about 30 % low against the JK, the Hall sensor does not reach PC1, and
+ * the NTC input sits at full scale. Publishing them puts three
+ * plausible-looking numbers on the bus that nobody should act on, so the frame
+ * is not registered and consumers read BMSMaster_JK_PackVoltage and
+ * BMSMaster_JK_PackCurrent instead - which is where codes 6 and 7 already key.
+ *
+ * The ADC itself keeps running: codes 8 and 11 still report a dead sensor or a
+ * stopped conversion stream. Set to 1 once the front end is fixed and the
+ * constants above are measured rather than inherited.
+ */
+#define CALIB_SEND_MASTER_MEASUREMENTS  (0)
+
 /* ADC count per degree C, 0 to 100, monotonically increasing. Provenance and
    the count-indexed rationale are in docs/adc.md. */
 extern const uint16_t calibNtcCount[101];
