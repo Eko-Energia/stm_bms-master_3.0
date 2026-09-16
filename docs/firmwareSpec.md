@@ -645,9 +645,15 @@ with `0x03` and a register. Confirmed on the bench: the link holds indefinitely 
 Nothing gates the retry, so the same read goes out every poll and the first good frame restores
 the link however long it has been down.
 
-One case is untested: the JK cold-starting alongside the master. Everything measured so far had
-the JK already powered. A link that is dead only after a full vehicle power cycle, and recovers
-on nothing, is the one symptom that would justify revisiting a wake command.
+**Sending `0x01` deadlocks the link, measured.** Restored on a throwaway branch and flashed: the
+BMS never answers it - no reply at all, so the poll times out instead of failing validation, and
+since a failed poll re-arms the activation the read is never reached. `failCount` saturates at 3,
+`linkValid` stays 0 and code 4 stands permanently. It is not a latent option to revisit.
+
+One case remains untested: the JK cold-starting alongside the master. Everything measured so far
+had the JK already powered. A link dead only after a full vehicle power cycle, recovering on
+nothing, is the one symptom that would warrant looking again - and even then not at `0x01`, which
+this pack demonstrably ignores.
 
 Three consecutive failures raise `JK_COMMS_TIMEOUT`; frame-level failures raise
 `JK_FRAME_INVALID`.

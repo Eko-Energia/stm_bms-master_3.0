@@ -60,6 +60,12 @@ other command: none of the five reference implementations activates, and the lin
 indefinitely on the bench without it. Nothing gates the retry, so the same read goes out every
 poll and the first good frame restores the link however long it has been down.
 
+> [!CAUTION]
+> **`0x01` activate breaks the link.** Measured on this pack: the BMS never answers it - no reply
+> at all, so it times out rather than failing validation. Because a failed poll re-arms the
+> activation, `0x06` is then never reached and `JK_COMMS_TIMEOUT` stands permanently. Do not add
+> it back.
+
 Three consecutive failures (`JK_FAIL_LIMIT`) zero the published payload rather than hold stale
 cell voltages.
 
