@@ -1331,7 +1331,10 @@ static const SoakFaultSpec soakFaults[] = {
     { "JK link loss",                      4u,  7000u,  6000u },
     { "pack voltage out of range",         6u, 20000u,  2000u },
     { "pack current above 300 A",          7u, 20000u,  2000u },
+    /* Gated with the frame it describes: unpublished, it is never raised. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
     { "on-board NTC open",                 8u, 20000u,  2000u },
+#endif
     { "ADC conversion stream stopped",     11u, 20000u,  2000u },
 };
 #define SOAK_FAULT_COUNT ((int)(sizeof soakFaults / sizeof soakFaults[0]))

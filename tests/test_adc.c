@@ -213,6 +213,7 @@ TEST(temperature_interpolates_between_anchors)
     CHECK(ADC_TempCenti() >= 3040u && ADC_TempCenti() <= 3060u);
 }
 
+#if CALIB_SEND_MASTER_MEASUREMENTS
 TEST(an_open_or_shorted_ntc_raises_a_sensor_fault)
 {
     setup();
@@ -229,6 +230,25 @@ TEST(an_open_or_shorted_ntc_raises_a_sensor_fault)
     CHECK(errorIndex(BMS_ERR_ADC_STALLED) < 0);
     CHECK_EQ(ADC_TempCenti(), 10000u);
 }
+#else
+/* With the measurement frame off, a faulted NTC is a fault about a reading
+   nobody can see - and on this board it would stand permanently. The stream
+   itself is still judged, so ADC_STALLED is unaffected. */
+TEST(a_faulted_ntc_is_silent_while_its_frame_is_unpublished)
+{
+    setup();
+    feed(150u, 2108u, 3000u, 10);                   /* open */
+    CHECK_EQ(errorIndex(BMS_ERR_TEMP_SENSOR_FAULT), -1);
+
+    setup();
+    feed(4050u, 2108u, 3000u, 10);                  /* shorted */
+    CHECK_EQ(errorIndex(BMS_ERR_TEMP_SENSOR_FAULT), -1);
+    CHECK_EQ(activeCount(), 0);
+
+    /* The conversion stream is still watched. */
+    CHECK_EQ(errorIndex(BMS_ERR_ADC_STALLED), -1);
+}
+#endif
 
 TEST(genuinely_cold_is_not_a_sensor_fault)
 {
@@ -329,7 +349,11 @@ RUN(not_ready_until_the_window_has_filled);
     RUN(trimmed_mean_drops_exactly_one_min_and_one_max);
     RUN(temperature_matches_the_table_at_its_anchor_points);
     RUN(temperature_interpolates_between_anchors);
+#if CALIB_SEND_MASTER_MEASUREMENTS
     RUN(an_open_or_shorted_ntc_raises_a_sensor_fault);
+#else
+    RUN(a_faulted_ntc_is_silent_while_its_frame_is_unpublished);
+#endif
     RUN(genuinely_cold_is_not_a_sensor_fault);
     RUN(ntc_guard_band_boundaries_do_not_fault);
     RUN(voltage_is_published_as_measured_past_the_database_range);

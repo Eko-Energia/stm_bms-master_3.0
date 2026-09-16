@@ -184,7 +184,12 @@ void ADC_Task(uint32_t nowMs)
     }
     packDeciamps = (int16_t)da;
 
-    /* Temperature, with open and short discriminated from genuinely cold. */
+    /* Temperature, with open and short discriminated from genuinely cold.
+       Raised only while the frame carrying the reading is published: with it
+       off this is a standing fault about a number nobody can see, and on this
+       board it would stand permanently. ADC_STALLED is not gated with it -
+       that one is about the peripheral, not the sensor. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
     if (tempCount < NTC_OPEN_BELOW || tempCount > NTC_SHORT_ABOVE) {
         const uint8_t blob[5] = { (uint8_t)(tempCount & 0xFFu),
                                   (uint8_t)((tempCount >> 8) & 0xFFu), 0u, 0u, 0u };
@@ -192,6 +197,7 @@ void ADC_Task(uint32_t nowMs)
     } else {
         clear(BMS_ERR_TEMP_SENSOR_FAULT);
     }
+#endif
     tempCenti = countToCenti(tempCount);
 }
 

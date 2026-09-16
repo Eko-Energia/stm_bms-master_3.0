@@ -550,7 +550,13 @@ static void sweepAdcChain(void)
         feed((uint16_t)c, PARK_CURR, PARK_VOLT, 10);
         const uint16_t want = countToCenti((uint16_t)c);
         const int faulted = (errIndex(BMS_ERR_TEMP_SENSOR_FAULT) >= 0);
+        /* The sensor fault is gated on the frame being published: with it off
+           it would stand permanently about a reading nobody can see. */
+#if CALIB_SEND_MASTER_MEASUREMENTS
         const int wantFault = (c < NTC_OPEN_BELOW || c > NTC_SHORT_ABOVE);
+#else
+        const int wantFault = 0;
+#endif
 
         CK(ADC_TempCenti() == want, "temp_output",
            "count=%u -> %u centi, expected %u", c, ADC_TempCenti(), want);
@@ -569,10 +575,18 @@ static void sweepAdcChain(void)
         if (c < NTC_OPEN_BELOW) { openHi = c; }
         if (c > NTC_SHORT_ABOVE && !shortSet) { shortLo = c; shortSet = 1; }
     }
+#if CALIB_SEND_MASTER_MEASUREMENTS
     printf("  temperature: 4096/4096 counts. open band 0..%u reports %u centi, "
            "short band %u..4095 reports %u centi, both with code %u\n",
            openHi, countToCenti((uint16_t)openHi), shortLo,
            countToCenti((uint16_t)shortLo), (unsigned)BMS_ERR_TEMP_SENSOR_FAULT);
+#else
+    printf("  temperature: 4096/4096 counts. open band 0..%u reports %u centi, "
+           "short band %u..4095 reports %u centi, neither raising a fault while "
+           "the measurement frame is unpublished\n",
+           openHi, countToCenti((uint16_t)openHi), shortLo,
+           countToCenti((uint16_t)shortLo));
+#endif
     printf("  gap: counts %u..%u are below the table but inside the guard "
            "band, so they report 0 centi with NO fault (documented DBC "
            "unsigned-signal limitation)\n", (unsigned)NTC_OPEN_BELOW,
