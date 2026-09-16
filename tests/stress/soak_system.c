@@ -1325,7 +1325,7 @@ typedef struct {
 } SoakFaultSpec;
 
 static const SoakFaultSpec soakFaults[] = {
-    { "board over-temperature",            1u,  2000u,  2000u },
+    { "pack thermistor warning",           1u, 14000u, 18000u },
     { "pack thermistor over-temperature",  2u, 14000u, 18000u },
     { "PCBCells module silent",            3u,  7000u,  4000u },
     { "JK link loss",                      4u,  7000u,  6000u },
@@ -1339,8 +1339,10 @@ static const SoakFaultSpec soakFaults[] = {
 static void soakApplyFault(int idx, int on)
 {
     switch (soakFaults[idx].code) {
-    case 1u:  world.adcTemp = on ? 3200u : 2100u; break;   /* >60 degC / ~26 degC   */
-    case 2u:  world.thermHot = on ? 220u : 100u;  break;   /* raw 220 > 153 limit   */
+    /* Both limits read the hottest pack thermistor now; 1 is the warning band
+       and 2 the error band above it. */
+    case 1u:  world.thermHot = on ? 128u : 100u;  break;   /* 50.2 / 39.2 degC      */
+    case 2u:  world.thermHot = on ? 220u : 100u;  break;   /* 86.3 / 39.2 degC      */
     case 3u:  world.feedTherm = !on;              break;
     case 4u:  world.jkReply   = !on;              break;
     /* Codes 6 and 7 read the JK now, not the master's own divider and Hall. */

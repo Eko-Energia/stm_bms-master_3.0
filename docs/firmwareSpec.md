@@ -436,7 +436,7 @@ Swept across the range, `- 125` errs `-0.412..0.000 degC` and `- 124` errs `-0.0
 an arbitrary reading that is 0.04 degC of mean error and would not justify a change on its own.
 It matters because the gain is `100/255`, so **the temperatures the fault logic keys on land on
 exact counts** - 40 degC is 102, 60 degC is 153, 100 degC is 255 - and `- 125` is a full count
-low at every one of them. With `- 124` the 0 degC floor, the 60 degC `CAN2_TEMP_HIGH` limit and
+low at every one of them. With `- 124` the 0 degC floor, the 60 degC over-temperature limit and
 the 100 degC ceiling all decode exactly, and the over-temperature trip moves from ~60.4 degC to
 ~60.0 degC.
 
@@ -505,8 +505,18 @@ staleness must be reported out of band.
 
 ### 6.4 Overtemperature
 
-`CAN2_TEMP_HIGH` at **60 degC** with a few degrees of clearing hysteresis, carrying pack index,
-thermistor index and raw count.
+Two limits on the hottest pack thermistor, both carrying pack index, thermistor index and raw
+count. `CAN2_TEMP_HIGH` is a **warning at `THERMAL_WARN_DEGC`** and `CAN2_TEMP_EXTREME` an
+**error at `THERMAL_ERROR_DEGC`** - 48 and 52 degC as configured, and the only place either
+number lives is `app_thermal.h`.
+
+**No hysteresis:** both follow the pack directly and clear on the same call the reading falls
+back. They are also **escalating, not cumulative** - above the error limit the warning is
+redundant and would cost a heartbeat slot of its own, so exactly one stands at a time.
+
+Positions on `THERM_DISABLED_LIST` report 0 and never reach the maximum, so they are excluded
+without a second test. The on-board NTC no longer raises either: it keys on the pack thermistors,
+which are the readings we trust (section 6.6, and `docs/adc.md` on the master's own sensor).
 
 ### 6.5 Saturated thermistors
 
@@ -540,7 +550,7 @@ happens, code 12 is how a dead thermistor becomes visible at all.
 `App/Inc/bms_therm_disabled.h` lists positions accepted as broken. A listed position
 reports **0 degC** on CAN1 and is skipped before any bookkeeping runs, so it reaches
 nothing: not the saturation count (code 12), not the silent bitmap (code 3), and not
-the pack maximum behind `CAN2_TEMP_HIGH` (code 2).
+the pack maximum behind the over-temperature limits (codes 1 and 2).
 
 Entries are `X(module, therm)` - the CAN1 signal `BMSMaster_PCB<module>Therm<therm>Temp`,
 and equally the CAN2 frame `PCBCells<module>_Therm<therm>`. The odd-up / even-down
@@ -898,8 +908,8 @@ value.
 
 | Code | Name | Severity | `Error_Specific_Data` |
 | ---: | --- | --- | --- |
-| 1 | `BMS_TEMP_HIGH` | error | temperature, centi-degC `u16` |
-| 2 | `CAN2_TEMP_HIGH` | error | pack `u8`, thermistor `u8`, raw count `u8` |
+| 1 | `CAN2_TEMP_HIGH` | warning | pack `u8`, thermistor `u8`, raw count `u8` |
+| 2 | `CAN2_TEMP_EXTREME` | error | pack `u8`, thermistor `u8`, raw count `u8` |
 | 3 | `CAN2_MODULE_SILENT` | error | bitmap of silent modules `u8` |
 | 4 | `JK_COMMS_TIMEOUT` | error | consecutive failures `u8` |
 | 5 | `JK_FRAME_INVALID` | warning | detail `u8`, kind `u8` (0 = received length, 1 = USART error bits) |
@@ -948,9 +958,9 @@ Two exceptions, both because the judgement spans more than one module:
   the contactor-open/red-LED fallback runs; otherwise `EH_stop()` reports code 10 and
   `CAN_App_Task()` keeps running so `BMSMaster_NODE` stays on the bus with `halted = 1`.
 
-**No fault emits severity 0.** The CSV grades codes 1 and 2 as `ERROR`, and the old
-implementation's use of `ERROR_SEVERITY_SAFE_STATE` for `BMS_TEMP_HIGH` is not followed. That
-also means `EH_triggerSafeState()` is never called.
+**No fault emits severity 0.** Code 1 is a warning and code 2 an error; the old implementation's
+use of `ERROR_SEVERITY_SAFE_STATE` for its board over-temperature is not followed. That also
+means `EH_triggerSafeState()` is never called.
 
 ### 10.1 Driver constants
 
