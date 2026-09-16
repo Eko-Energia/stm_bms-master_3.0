@@ -163,6 +163,9 @@ void JK_OnTxComplete(void)
     if (state != JK_SENDING) { return; }
     setDirection(DE_IDLE, RE_LISTENING);
     state = JK_RECEIVING;
+    /* The line has been idle since before the request, so IDLE is already set:
+       arming on it fires an instant zero-length event. */
+    __HAL_UART_CLEAR_IDLEFLAG(uart);
     (void)HAL_UARTEx_ReceiveToIdle_DMA(uart, rxBuf, JKP_RX_BUF_LEN);
 }
 
@@ -193,11 +196,29 @@ void JK_OnUartError(uint32_t errorBits)
 
     __HAL_UART_CLEAR_FEFLAG(uart);    /* reads SR then DR: clears the error and drops the byte */
     (void)HAL_UART_AbortReceive(uart);
+    __HAL_UART_CLEAR_IDLEFLAG(uart);
     (void)HAL_UARTEx_ReceiveToIdle_DMA(uart, rxBuf, JKP_RX_BUF_LEN);
 }
 
 void JK_OnRxEvent(uint16_t size)
 {
+    if (uart == NULL) { return; }
+
+    /* HAL raises this on the DMA half-transfer and transfer-complete as well as
+       on an idle line - 256 bytes into a 512-byte buffer, which lands mid-reply
+       for a 306-byte frame. Only idle means the far end has stopped talking;
+       the others leave the DMA running, so returning keeps the reply intact. */
+    if (HAL_UARTEx_GetRxEventType(uart) != HAL_UART_RXEVENT_IDLE) { return; }
+
+    /* Too short to be a frame: the reply is still on its way. Listening again
+       costs nothing; ending the poll here loses it. The response timeout stays
+       the backstop. */
+    if (size < JKP_FRAME_MIN) {
+        __HAL_UART_CLEAR_IDLEFLAG(uart);
+        (void)HAL_UARTEx_ReceiveToIdle_DMA(uart, rxBuf, JKP_RX_BUF_LEN);
+        return;
+    }
+
     /* Clamp rather than trust: a size above the armed buffer is a HAL anomaly,
        and JKP_Validate rejects the frame anyway. */
     rxLen = (size > JKP_RX_BUF_LEN) ? JKP_RX_BUF_LEN : size;

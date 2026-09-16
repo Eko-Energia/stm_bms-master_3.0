@@ -1,7 +1,6 @@
 #include "jk_protocol.h"
 #include <string.h>
 
-#define JKP_OVERHEAD      (20u)   /* everything but the TLV payload */
 #define JKP_PAYLOAD_START (11u)
 #define JKP_END_FLAG      (0x68u)
 #define JKP_SRC_PC        (0x03u) /* frame source: PC upper computer */
@@ -115,7 +114,7 @@ bool JKP_Validate(const uint8_t *buf, uint16_t len)
 {
     /* len is the DMA's reported size: untrusted. Above the declared buffer the
        trailing reads below would run past the caller's array. */
-    if (buf == NULL || len < JKP_OVERHEAD || len > JKP_RX_BUF_LEN) {
+    if (buf == NULL || len < JKP_FRAME_MIN || len > JKP_RX_BUF_LEN) {
         return false;
     }
     if (buf[0] != 0x4Eu || buf[1] != 0x57u) {

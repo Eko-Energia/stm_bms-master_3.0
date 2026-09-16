@@ -103,6 +103,13 @@ HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *h, uint8_t *d
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h);
 /* Real HAL reads SR then DR, clearing the error and discarding the byte. */
 #define __HAL_UART_CLEAR_FEFLAG(__HANDLE__) do { (void)(__HANDLE__); } while (0)
+/* HAL raises RxEventCallback on half-transfer and transfer-complete as well as
+   on an idle line; only idle means the sender stopped. */
+#define HAL_UART_RXEVENT_TC   (0x00000000U)
+#define HAL_UART_RXEVENT_HT   (0x00000001U)
+#define HAL_UART_RXEVENT_IDLE (0x00000002U)
+uint32_t          HAL_UARTEx_GetRxEventType(UART_HandleTypeDef *h);
+void              Fake_SetRxEventType(uint32_t type);
 uint32_t          HAL_UART_GetError(UART_HandleTypeDef *h);
 void              Fake_SetUartError(uint32_t bits);
 uint32_t          Fake_UartAbortCount(void);

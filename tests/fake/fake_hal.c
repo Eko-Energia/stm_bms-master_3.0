@@ -58,6 +58,7 @@ static uint32_t canAbortCount;
 
 static uint32_t uartErrBits;
 static uint32_t uartAbortCount;
+static uint32_t uartRxEventType = HAL_UART_RXEVENT_IDLE;
 
 void Fake_Reset(void)
 {
@@ -65,6 +66,7 @@ void Fake_Reset(void)
     uartErrBits = 0; uartAbortCount = 0;
     uartTxLen = 0; uartRxQueuedLen = 0; uartRxDest = NULL; uartRxCap = 0;
     uartTxFail = 0; canStartFail = 0;
+    uartRxEventType = HAL_UART_RXEVENT_IDLE;
     rxHead = 0; rxTail = 0;
     canTxHold = 0; canAbortCount = 0;
     memset(txUnit, 0, sizeof txUnit);
@@ -306,6 +308,8 @@ uint16_t Fake_LastUartTx(uint8_t *out, uint16_t cap)
     return n;
 }
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h) { UNUSED(h); uartAbortCount++; return HAL_OK; }
+uint32_t HAL_UARTEx_GetRxEventType(UART_HandleTypeDef *h) { UNUSED(h); return uartRxEventType; }
+void     Fake_SetRxEventType(uint32_t type) { uartRxEventType = type; }
 uint32_t HAL_UART_GetError(UART_HandleTypeDef *h) { UNUSED(h); return uartErrBits; }
 void     Fake_SetUartError(uint32_t bits) { uartErrBits = bits; }
 uint32_t Fake_UartAbortCount(void) { return uartAbortCount; }

@@ -553,6 +553,34 @@ TEST(the_link_recovers_after_persistent_line_errors)
     CHECK_EQ(EH_getActiveCount(&eh), 0u);
 }
 
+/* HAL raises RxEventCallback at the DMA half-transfer as well as on an idle
+   line - 256 bytes into the 512-byte buffer, which is mid-reply for a real
+   306-byte frame. Taking that for a frame failed every poll on hardware while
+   a perfectly good response was still arriving. */
+TEST(a_half_transfer_event_does_not_end_the_poll)
+{
+    setup();
+    uint8_t reply[64];
+    const uint16_t n = makeSocResponse(reply, 60u);
+
+    Fake_SetTick(0u);
+    JK_Task(0u);
+    Fake_QueueUartRx(reply, n);
+    JK_OnTxComplete();
+
+    Fake_SetRxEventType(HAL_UART_RXEVENT_HT);
+    JK_OnRxEvent(JKP_RX_BUF_LEN / 2u);           /* mid-reply: not a frame */
+    JK_Task(0u);
+    CHECK(!JK_Valid());
+    CHECK_EQ(eh.activeErrorCount, 0u);           /* nothing reported yet */
+
+    Fake_SetRxEventType(HAL_UART_RXEVENT_IDLE);  /* the sender stops */
+    JK_OnRxEvent(n);
+    JK_Task(0u);
+    CHECK(JK_Valid());
+    CHECK_EQ(JK_Data()->soc, 60u);
+}
+
 int main(void)
 {
     RUN(every_poll_is_a_read_all_and_matches_the_reference_implementations);
@@ -578,5 +606,6 @@ int main(void)
     RUN(one_dropped_poll_is_not_a_bus_fault);
     RUN(the_comms_fault_reports_the_post_increment_failure_count);
     RUN(a_frame_error_does_not_re_arm_activation);
+    RUN(a_half_transfer_event_does_not_end_the_poll);
     return TEST_SUMMARY();
 }

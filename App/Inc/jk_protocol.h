@@ -6,6 +6,7 @@
 #define JKP_REQUEST_LEN   (21u)
 #define JKP_RX_BUF_LEN    (512u)    /* worst-case response is about 339 bytes */
 #define JKP_CELLS_MAX     (21u)     /* the pack is 21S */
+#define JKP_FRAME_MIN     (20u)     /* header, record number, end flag, checksum */
 
 #define JKP_CMD_ACTIVATE  (0x01u)
 #define JKP_CMD_READ_ALL  (0x06u)
