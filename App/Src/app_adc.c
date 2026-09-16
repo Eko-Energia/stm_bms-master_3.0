@@ -9,10 +9,13 @@
 #define CH_CURRENT        (1u)
 #define CH_VOLTAGE        (2u)
 
-/* DBC signal ranges. Values outside are clamped and reported. */
-#define VOLT_MIN_DV       (630u)
-#define VOLT_MAX_DV       (870u)
-#define CURRENT_MAX_DA    (3000)
+/* A database range is a check, not a transform: a reading goes out as measured
+   and the fault says it is out of range. The only bound here is what the signal
+   can carry - past that the value wraps and reads as its opposite, which is the
+   one error worse than an out-of-range number. Limits are app_jk.c's. */
+#define VOLT_ENCODE_MAX_DV    (65535u)   /* BMSMaster_MasterBatteryVoltage, uint16 */
+#define CURRENT_ENCODE_MAX_DA (32767)    /* BMSMaster_MasterBatteryCurrent, int16  */
+#define CURRENT_ENCODE_MIN_DA (-32768)
 #define TEMP_MAX_CENTI    (10000u)
 
 /* Guard bands. The table spans counts 1092..3728, so a reading far outside it
@@ -109,7 +112,7 @@ void ADC_Init(volatile uint16_t *dmaBuf, EH_HandleTypeDef *eh)
     convCplt = 0u;
     windowIdx = 0u;
     windowFill = 0u;
-    packDecivolts = VOLT_MIN_DV;
+    packDecivolts = 0u;            /* nothing measured yet; do not invent 63.0 V */
     packDeciamps = 0;
     tempCenti = 0u;
     lastScanMs = 0u;
@@ -162,10 +165,9 @@ void ADC_Task(uint32_t nowMs)
     /* Voltage. Max intermediate 4095 * 228554 = 936M, inside uint32. */
     uint32_t dv = (((uint32_t)voltCount * CALIB_PACK_V_NUM) + (CALIB_PACK_V_DEN / 2u))
                   / CALIB_PACK_V_DEN;
-    /* Kept inside the database range; PACK_VOLT_RANGE is raised by app_jk.c
-       against the JK's own measurement, not this one. */
-    if (dv < VOLT_MIN_DV)      { dv = VOLT_MIN_DV; }
-    else if (dv > VOLT_MAX_DV) { dv = VOLT_MAX_DV; }
+    /* 4095 counts is 936 dV, so the guard never fires at this gain; it is here
+       so a recalibration cannot silently wrap the signal. */
+    if (dv > VOLT_ENCODE_MAX_DV) { dv = VOLT_ENCODE_MAX_DV; }
     packDecivolts = (uint16_t)dv;
 
     /* Current. Rounded away from zero so the sign is symmetric. */
@@ -177,8 +179,8 @@ void ADC_Task(uint32_t nowMs)
         da = delta * CALIB_CURRENT_NUM;
         da = (da >= 0) ? ((da + (CALIB_CURRENT_DEN / 2)) / CALIB_CURRENT_DEN)
                        : ((da - (CALIB_CURRENT_DEN / 2)) / CALIB_CURRENT_DEN);
-        if (da > CURRENT_MAX_DA)       { da = CURRENT_MAX_DA;  }
-        else if (da < -CURRENT_MAX_DA) { da = -CURRENT_MAX_DA; }
+        if (da > CURRENT_ENCODE_MAX_DA)      { da = CURRENT_ENCODE_MAX_DA; }
+        else if (da < CURRENT_ENCODE_MIN_DA) { da = CURRENT_ENCODE_MIN_DA; }
     }
     packDeciamps = (int16_t)da;
 

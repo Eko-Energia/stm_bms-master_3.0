@@ -270,9 +270,30 @@ static void sweepIdMacros(void)
 
 /* ------------------------------------------------------------------ */
 /* 4. THERM_OnFrame over every id, with boundary raws                 */
+/* Positions on THERM_DISABLED_LIST report 0 degC and take part in nothing:
+   not the argmax, not the saturation count, not the silent bitmap. */
+static int thermDisabled(uint8_t module, uint8_t therm)
+{
+    (void)module; (void)therm;
+#define X(m, t) if (module == (m) && therm == (t)) { return 1; }
+    THERM_DISABLED_LIST(X)
+#undef X
+    return 0;
+}
+
+static int thermDisabledCount(void)
+{
+    int n = 0;
+#define X(m, t) n++;
+    THERM_DISABLED_LIST(X)
+#undef X
+    return n;
+}
+
 /* ------------------------------------------------------------------ */
 static const struct { uint32_t id; uint8_t module; uint8_t therm; const char *name; } kDbc[] = {
 #include "dbc_therm_ids.inc"
+
 };
 
 #define PROBE 200u
@@ -319,8 +340,10 @@ static void sweepThermOnFrame(void)
             }
         }
         if (accepted(id)) {
-            CK(hits == 1, "therm_frame_lands_in_exactly_one_cell",
-               "id=%u landed in %d cells", id, hits);
+            const int want = thermDisabled((uint8_t)(MODULE_OF(id)),
+                                           (uint8_t)(THERM_OF(id))) ? 0 : 1;
+            CK(hits == want, "therm_frame_lands_in_exactly_one_cell",
+               "id=%u landed in %d cells, expected %d", id, hits, want);
             if (hits == 1) {
                 CK(owner[hitP - 1][hitT - 1] == -1, "therm_cell_collision",
                    "id=%u and id=%ld both map to (module %d, therm %d)",
@@ -335,8 +358,9 @@ static void sweepThermOnFrame(void)
                "rejected id=%u wrote into (module %d, therm %d)", id, hitP, hitT);
         }
     }
-    CK(distinct == 63, "therm_all_63_cells_covered",
-       "%d distinct cells reached, expected 63", distinct);
+    CK(distinct == 63 - thermDisabledCount(), "therm_all_63_cells_covered",
+       "%d distinct cells reached, expected %d", distinct,
+       63 - thermDisabledCount());
     printf("  pass 2: 63 accepted ids -> %d distinct (module, thermistor) "
            "cells, 1985 rejected ids are no-ops\n", distinct);
 
@@ -347,7 +371,8 @@ static void sweepThermOnFrame(void)
         THERM_Init(NULL);
         THERM_OnFrame(kDbc[i].id, (uint8_t)PROBE);
         THERM_Task();
-        CK(THERM_Filtered(kDbc[i].module, kDbc[i].therm) == (uint8_t)PROBE,
+        CK(THERM_Filtered(kDbc[i].module, kDbc[i].therm) ==
+               (thermDisabled(kDbc[i].module, kDbc[i].therm) ? 0u : (uint8_t)PROBE),
            "dbc_name_matches_cell",
            "%s (id %u) did not land in (module %u, therm %u)",
            kDbc[i].name, kDbc[i].id, kDbc[i].module, kDbc[i].therm);
@@ -368,6 +393,7 @@ static void sweepThermOnFrame(void)
             THERM_Init(NULL);
             THERM_OnFrame(kDbc[i].id, raws[k]);
             THERM_Task();
+            if (thermDisabled(kDbc[i].module, kDbc[i].therm)) { continue; }
             CK(THERM_Filtered(kDbc[i].module, kDbc[i].therm) == raws[k],
                "therm_raw_round_trip", "%s raw=%u came back as %u",
                kDbc[i].name, raws[k], THERM_Filtered(kDbc[i].module, kDbc[i].therm));
@@ -400,10 +426,13 @@ static struct CAN_scheduledMsgList gSched;
 static EH_HandleTypeDef gEh;
 static volatile uint16_t gBuf[3];
 
+/* A cleared fault stays listed until it has reached the bus once, so an entry
+   already flagged for drop is not standing. */
 static int errIndex(uint16_t code)
 {
     for (uint8_t i = 0u; i < gEh.activeErrorCount; i++) {
-        if (gEh.activeErrors[i].errorCode == code) { return (int)i; }
+        if (gEh.activeErrors[i].errorCode == code
+            && gEh.activeErrors[i].pendingClear == 0u) { return (int)i; }
     }
     return -1;
 }
@@ -449,12 +478,11 @@ static void sweepAdcChain(void)
     for (uint32_t c = 0u; c < 4096u; c++) {
         feed(PARK_TEMP, PARK_CURR, (uint16_t)c, 10);
         const unsigned long raw = refDecivolts(c);
-        const unsigned long want = (raw < VOLT_MIN_DV) ? VOLT_MIN_DV
-                                 : (raw > VOLT_MAX_DV) ? VOLT_MAX_DV : raw;
+        const unsigned long want = raw;          /* published as measured */
         const int faulted = (errIndex(BMS_ERR_PACK_VOLT_RANGE) >= 0);
-        const int wantFault = (raw < VOLT_MIN_DV || raw > VOLT_MAX_DV);
+        const int wantFault = 0;                 /* the limit is app_jk.c's now */
 
-        CK(ADC_PackDecivolts() == (uint16_t)want, "volt_output_clamped",
+        CK(ADC_PackDecivolts() == (uint16_t)want, "volt_output_as_measured",
            "count=%u raw=%lu dV -> output %u, expected %lu", c,
            raw, ADC_PackDecivolts(), want);
         CK(faulted == wantFault, "volt_fault_code",
@@ -471,10 +499,9 @@ static void sweepAdcChain(void)
         }
         if (!wantFault) { if (!vLoSet) { vLo = c; vLoSet = 1; } vHi = c; }
     }
-    printf("  voltage: 4096/4096 counts. no fault for counts %u..%u "
-           "(%lu..%lu dV); clamped to %u below and %u above\n",
-           vLo, vHi, refDecivolts(vLo), refDecivolts(vHi),
-           (unsigned)VOLT_MIN_DV, (unsigned)VOLT_MAX_DV);
+    printf("  voltage: 4096/4096 counts published as measured, %lu..%lu dV; "
+           "no fault raised from the ADC (counts %u..%u)\n",
+           refDecivolts(vLo), refDecivolts(vHi), vLo, vHi);
 
     /* ---- current ---- */
     uint32_t iLo = 0u, iHi = 0u;
@@ -482,12 +509,13 @@ static void sweepAdcChain(void)
     for (uint32_t c = 0u; c < 4096u; c++) {
         feed(PARK_TEMP, (uint16_t)c, PARK_VOLT, 10);
         const long raw = refDeciamps(c);
-        const long want = (raw > CURRENT_MAX_DA) ? CURRENT_MAX_DA
-                        : (raw < -CURRENT_MAX_DA) ? -CURRENT_MAX_DA : raw;
+        /* An absent sensor publishes 0 A; otherwise the reading goes out as
+           measured, bounded only by what int16 deciamps can carry. */
+        const long want = (c < 100u) ? 0 : raw;
         const int faulted = (errIndex(BMS_ERR_PACK_CURRENT_HIGH) >= 0);
-        const int wantFault = (raw > CURRENT_MAX_DA || raw < -CURRENT_MAX_DA);
+        const int wantFault = 0;                 /* the limit is app_jk.c's now */
 
-        CK(ADC_PackDeciamps() == (int16_t)want, "curr_output_clamped",
+        CK(ADC_PackDeciamps() == (int16_t)want, "curr_output_as_measured",
            "count=%u raw=%ld dA -> output %d, expected %ld", c, raw,
            ADC_PackDeciamps(), want);
         CK(faulted == wantFault, "curr_fault_code",
@@ -509,10 +537,10 @@ static void sweepAdcChain(void)
         }
         if (!wantFault) { if (!iLoSet) { iLo = c; iLoSet = 1; } iHi = c; }
     }
-    printf("  current: 4096/4096 counts. no fault for counts %u..%u "
-           "(%ld..%ld dA); clamped to +-%d outside; sign symmetric at "
-           "offset+-1: %ld / %ld\n", iLo, iHi, refDeciamps(iLo), refDeciamps(iHi),
-           CURRENT_MAX_DA, refDeciamps(CALIB_CURRENT_OFFSET - 1),
+    printf("  current: 4096/4096 counts published as measured, %ld..%ld dA; "
+           "no fault raised from the ADC; sign symmetric at offset+-1: "
+           "%ld / %ld\n", refDeciamps(iLo), refDeciamps(iHi),
+           refDeciamps(CALIB_CURRENT_OFFSET - 1),
            refDeciamps(CALIB_CURRENT_OFFSET + 1));
 
     /* ---- temperature ---- */
@@ -558,8 +586,7 @@ static void sweepAdcChain(void)
     for (uint32_t v = 0u; v <= 0xFFFFu; v++) {
         feed(PARK_TEMP, PARK_CURR, (uint16_t)v, 10);
         const unsigned long raw = refDecivolts(v & 0x0FFFu);
-        const unsigned long want = (raw < VOLT_MIN_DV) ? VOLT_MIN_DV
-                                 : (raw > VOLT_MAX_DV) ? VOLT_MAX_DV : raw;
+        const unsigned long want = raw;          /* published as measured */
         CK(ADC_PackDecivolts() == (uint16_t)want, "dma_word_masked_to_12_bits",
            "buffer=0x%04x -> %u dV, expected %lu (masked count %u)", v,
            ADC_PackDecivolts(), want, v & 0x0FFFu);
@@ -805,8 +832,10 @@ static void sweepFillAndAccessor(void)
             const uint8_t v = THERM_Filtered((uint8_t)m, (uint8_t)t);
             if (m >= 1u && m <= THERM_MODULES && t >= 1u && t <= THERM_PER_MODULE) {
                 inRange++;
-                CK(v != 0u, "filtered_in_range_returns_cell",
-                   "(%u,%u) returned 0 but a frame was ingested for it", m, t);
+                if (!thermDisabled((uint8_t)m, (uint8_t)t)) {
+                    CK(v != 0u, "filtered_in_range_returns_cell",
+                       "(%u,%u) returned 0 but a frame was ingested for it", m, t);
+                }
             } else {
                 CK(v == 0u, "filtered_out_of_range_returns_zero",
                    "(%u,%u) returned %u, expected 0", m, t, v);

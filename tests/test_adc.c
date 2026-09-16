@@ -126,20 +126,23 @@ TEST(current_is_signed_around_the_zero_offset)
     CHECK_EQ(ADC_PackDeciamps(), -10);
 }
 
-/* The range faults live in app_jk.c now, against the JK's own reading, so the
-   ADC only has to keep its published value inside the database range. */
-TEST(current_clamps_both_directions_without_faulting)
+/* The range faults live in app_jk.c now, against the JK's own reading. The ADC
+   publishes what it measured: a database range is a check, not a transform. */
+TEST(current_is_published_as_measured_past_the_database_range)
 {
     setup();
-    /* count 4095: (4095-2108)*5 = 9935, rounded/2 = 4968 da, well past +3000 */
+    /* count 4095: (4095-2108)*5 = 9935, rounded/2 = 4968 da = 496.8 A */
     feed(calibNtcCount[25], 4095u, 3000u, 10);
-    CHECK_EQ(ADC_PackDeciamps(), 3000);
+    CHECK_EQ(ADC_PackDeciamps(), 4968);
     CHECK_EQ(errorIndex(BMS_ERR_PACK_CURRENT_HIGH), -1);
 
-    /* count 908: the most negative current the database can carry, -300.0 A */
+    /* count 908 is exactly -300.0 A, the database floor, and passes unaltered */
     feed(calibNtcCount[25], 908u, 3000u, 10);
     CHECK_EQ(ADC_PackDeciamps(), -3000);
-    CHECK_EQ(errorIndex(BMS_ERR_PACK_CURRENT_HIGH), -1);
+
+    /* count 200: (200-2108)*5/2 = -4770 da = -477.0 A, still far inside int16 */
+    feed(calibNtcCount[25], 200u, 3000u, 10);
+    CHECK_EQ(ADC_PackDeciamps(), -4770);
 }
 
 TEST(an_absent_current_sensor_reads_zero_amps)
@@ -235,17 +238,26 @@ TEST(genuinely_cold_is_not_a_sensor_fault)
     CHECK_EQ(ADC_TempCenti(), 0u);
 }
 
-TEST(out_of_range_voltage_clamps_without_faulting)
+TEST(voltage_is_published_as_measured_past_the_database_range)
 {
     setup();
-    feed(calibNtcCount[25], 2108u, 2000u, 10);      /* about 45.7 V, below the 63 V floor */
-    CHECK_EQ(ADC_PackDecivolts(), 630u);            /* clamped to the DBC minimum */
+    feed(calibNtcCount[25], 2108u, 2000u, 10);      /* 457 dV, below the 63 V floor */
+    CHECK_EQ(ADC_PackDecivolts(), 457u);
     CHECK_EQ(errorIndex(BMS_ERR_PACK_VOLT_RANGE), -1);
 
-    /* count 4095: (4095*228554+500000)/1000000 = 936 dV, well past the 87 V ceiling */
+    /* count 4095: (4095*228554+500000)/1000000 = 936 dV, past the 87 V ceiling */
     feed(calibNtcCount[25], 2108u, 4095u, 10);
-    CHECK_EQ(ADC_PackDecivolts(), 870u);            /* clamped to the DBC maximum */
+    CHECK_EQ(ADC_PackDecivolts(), 936u);
     CHECK_EQ(errorIndex(BMS_ERR_PACK_VOLT_RANGE), -1);
+}
+
+/* Before the first conversion completes there is no reading, and 63.0 V is a
+   number the master has never measured. */
+TEST(the_voltage_starts_at_zero_not_at_the_range_floor)
+{
+    setup();
+    CHECK_EQ(ADC_PackDecivolts(), 0u);
+    CHECK_EQ(ADC_PackDeciamps(), 0);
 }
 
 TEST(in_range_values_raise_nothing)
@@ -312,7 +324,7 @@ RUN(not_ready_until_the_window_has_filled);
     RUN(trimmed_mean_discards_a_single_outlier_entirely);
     RUN(pack_voltage_converts_with_rounding);
     RUN(current_is_signed_around_the_zero_offset);
-    RUN(current_clamps_both_directions_without_faulting);
+    RUN(current_is_published_as_measured_past_the_database_range);
     RUN(an_absent_current_sensor_reads_zero_amps);
     RUN(trimmed_mean_drops_exactly_one_min_and_one_max);
     RUN(temperature_matches_the_table_at_its_anchor_points);
@@ -320,7 +332,8 @@ RUN(not_ready_until_the_window_has_filled);
     RUN(an_open_or_shorted_ntc_raises_a_sensor_fault);
     RUN(genuinely_cold_is_not_a_sensor_fault);
     RUN(ntc_guard_band_boundaries_do_not_fault);
-    RUN(out_of_range_voltage_clamps_without_faulting);
+    RUN(voltage_is_published_as_measured_past_the_database_range);
+    RUN(the_voltage_starts_at_zero_not_at_the_range_floor);
     RUN(in_range_values_raise_nothing);
     RUN(a_stalled_conversion_stream_is_reported_and_stops_being_ready);
     RUN(the_liveness_check_survives_the_tick_wrap);
