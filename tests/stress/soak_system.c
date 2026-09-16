@@ -332,7 +332,12 @@ HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *h, CAN_TxHeaderTypeDef
     halHook();   /* lands inside CAN_HandleScheduled's loop over the scheduler */
 
     for (uint32_t i = 0; i < HAL_TX_MAILBOXES; i++) {
-        if (halTxUnit[u].busy[i] && !halCanTxHold && soakTick >= halTxUnit[u].freeAtTick[i]) {
+        /* Signed delta, not soakTick >= freeAtTick: an absolute compare leaves a
+           mailbox busy for ever when the deadline lands the far side of the
+           2^32 ms tick wrap, and only the driver's blocked-mailbox abort frees
+           it again. */
+        if (halTxUnit[u].busy[i] && !halCanTxHold &&
+            (int32_t)(soakTick - halTxUnit[u].freeAtTick[i]) >= 0) {
             halTxUnit[u].busy[i] = 0u;
         }
     }
