@@ -685,8 +685,9 @@ currents.
 | `JK_SOC` (%) | `0x85` | direct |
 | `JK_SOH` (%) | `0xb9` / `0xaa` | **derived**: actual capacity / capacity setting x 100, clamped to 100 up to 110 %. The protocol has no SOH register. |
 | `JK_Cell1..21_mV` | `0x79` | direct, mV; cell count = length / 3 |
-| `JK_MosTemp` | `0x80` | `v > 100 ? -(v - 100) : v` |
-| `JK_BalTemp` | `0x81` | battery-box temperature, same decode |
+| `JK_InternalTemp` | `0x80` | the JK's own power tube, the app's "CMOS Temp". `v > 100 ? -(v - 100) : v` |
+| `JK_ContactorTemp` | `0x81` | external probe on the JK's T1 terminal, same decode |
+| `JK_ControlBowlTemp` | `0x82` | external probe on the JK's T2 terminal, same decode |
 | `JK_Cycles` | `0x87` | direct |
 | `JK_CellCount` | `0x8a` | direct, true runtime count |
 | `JK_ModeFlags` | `0x8c` | bits 0-3 only; bits 4-15 are reserved and masked off |

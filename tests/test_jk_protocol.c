@@ -193,12 +193,23 @@ TEST(a_reported_cell_count_above_the_series_taps_rejects_the_frame)
 TEST(temperatures_use_the_offset_above_one_hundred_encoding)
 {
     uint8_t buf[64];
-    /* 0x80 = 45 -> +45 degC. 0x81 = 105 -> -5 degC. */
-    const uint8_t payload[6] = { 0x80u, 0x00u, 0x2Du, 0x81u, 0x00u, 0x69u };
+    /* The JK's own convention: 0x80 = 45 -> +45 degC, 0x81 = 105 -> -5 degC,
+       0x82 = 30 -> +30 degC. All three probes decode the same way. */
+    const uint8_t payload[9] = { 0x80u, 0x00u, 0x2Du,
+                                 0x81u, 0x00u, 0x69u,
+                                 0x82u, 0x00u, 0x1Eu };
     JK_Data_t d;
     CHECK(JKP_Decode(buf, makeResponse(buf, payload, sizeof payload), &d));
-    CHECK_EQ(d.mosTempC, 45);
-    CHECK_EQ(d.balTempC, -5);
+    CHECK_EQ(d.internalTempC, 45);
+    CHECK_EQ(d.contactorTempC, -5);
+    CHECK_EQ(d.controlBowlTempC, 30);
+
+    /* 100 is the hottest the encoding can carry: 101 is already -1, so the JK
+       cannot report above 100 degC at all. */
+    const uint8_t hot[6] = { 0x80u, 0x00u, 100u, 0x82u, 0x00u, 101u };
+    CHECK(JKP_Decode(buf, makeResponse(buf, hot, sizeof hot), &d));
+    CHECK_EQ(d.internalTempC, 100);
+    CHECK_EQ(d.controlBowlTempC, -1);
 }
 
 TEST(soh_is_derived_from_actual_over_configured_capacity)
@@ -314,18 +325,26 @@ TEST(a_temperature_raw_outside_the_encoding_rejects_the_frame)
     uint8_t buf[64];
     JK_Data_t d;
     /* 140 is the lowest defined raw, -40 degC. */
-    const uint8_t edge[6] = { 0x80u, 0x00u, 140u, 0x81u, 0x00u, 140u };
+    const uint8_t edge[9] = { 0x80u, 0x00u, 140u,
+                              0x81u, 0x00u, 140u,
+                              0x82u, 0x00u, 140u };
     CHECK(JKP_Decode(buf, makeResponse(buf, edge, sizeof edge), &d));
-    CHECK_EQ(d.mosTempC, -40);
-    CHECK_EQ(d.balTempC, -40);
+    CHECK_EQ(d.internalTempC, -40);
+    CHECK_EQ(d.contactorTempC, -40);
+    CHECK_EQ(d.controlBowlTempC, -40);
 
-    /* Undefined raws: 229 truncates to +127 degC and 65535 to +101 degC. */
+    /* Undefined raws: 229 truncates to +127 degC and 65535 to +101 degC. Every
+       register is guarded, not just the two that predate the third probe. */
     const uint8_t over[3]  = { 0x80u, 0x00u, 141u };
     const uint8_t trunc[3] = { 0x80u, 0x00u, 0xE5u };
     const uint8_t wide[3]  = { 0x81u, 0xFFu, 0xFFu };
+    const uint8_t over2[3] = { 0x82u, 0x00u, 141u };
+    const uint8_t wide2[3] = { 0x82u, 0xFFu, 0xFFu };
     CHECK(!JKP_Decode(buf, makeResponse(buf, over, sizeof over), &d));
     CHECK(!JKP_Decode(buf, makeResponse(buf, trunc, sizeof trunc), &d));
     CHECK(!JKP_Decode(buf, makeResponse(buf, wide, sizeof wide), &d));
+    CHECK(!JKP_Decode(buf, makeResponse(buf, over2, sizeof over2), &d));
+    CHECK(!JKP_Decode(buf, makeResponse(buf, wide2, sizeof wide2), &d));
 }
 
 TEST(a_current_outside_the_pack_range_rejects_the_frame)

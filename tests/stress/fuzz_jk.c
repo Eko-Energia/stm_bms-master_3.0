@@ -191,15 +191,20 @@ static void checkInvariants(const char *pop, unsigned long iter,
         snprintf(det, sizeof det, "cellCount=%u (pack is 21S, spec 7.5)", d->cellCount);
         report("cellCount > 21", pop, iter, buf, len, det);
     }
-    if (d->mosTempC < TEMP_MIN || d->mosTempC > TEMP_MAX) {
-        snprintf(det, sizeof det, "mosTempC=%d, outside the %d..%d C band the "
-                 "0x80 encoding can express", d->mosTempC, TEMP_MIN, TEMP_MAX);
-        report("mosTempC outside protocol band", pop, iter, buf, len, det);
+    if (d->internalTempC < TEMP_MIN || d->internalTempC > TEMP_MAX) {
+        snprintf(det, sizeof det, "internalTempC=%d, outside the %d..%d C band the "
+                 "0x80 encoding can express", d->internalTempC, TEMP_MIN, TEMP_MAX);
+        report("internalTempC outside protocol band", pop, iter, buf, len, det);
     }
-    if (d->balTempC < TEMP_MIN || d->balTempC > TEMP_MAX) {
-        snprintf(det, sizeof det, "balTempC=%d, outside the %d..%d C band the "
-                 "0x81 encoding can express", d->balTempC, TEMP_MIN, TEMP_MAX);
-        report("balTempC outside protocol band", pop, iter, buf, len, det);
+    if (d->contactorTempC < TEMP_MIN || d->contactorTempC > TEMP_MAX) {
+        snprintf(det, sizeof det, "contactorTempC=%d, outside the %d..%d C band the "
+                 "0x81 encoding can express", d->contactorTempC, TEMP_MIN, TEMP_MAX);
+        report("contactorTempC outside protocol band", pop, iter, buf, len, det);
+    }
+    if (d->controlBowlTempC < TEMP_MIN || d->controlBowlTempC > TEMP_MAX) {
+        snprintf(det, sizeof det, "controlBowlTempC=%d, outside the %d..%d C band the "
+                 "0x82 encoding can express", d->controlBowlTempC, TEMP_MIN, TEMP_MAX);
+        report("controlBowlTempC outside protocol band", pop, iter, buf, len, det);
     }
     if (d->modeFlags > 0x0Fu) {
         /* spec 7.4: "only bits 0-3 are defined" */

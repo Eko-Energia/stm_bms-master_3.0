@@ -20,8 +20,12 @@ typedef struct {
     uint8_t  modeFlags;                      /* 0x8c low byte             */
     uint16_t cellMillivolts[JKP_CELLS_MAX];  /* 0x79                      */
     uint8_t  cellCount;                      /* 0x8a, true runtime count  */
-    int8_t   mosTempC;                       /* 0x80                      */
-    int8_t   balTempC;                       /* 0x81, battery-box         */
+    /* Whole degrees. The JK's own sign convention spends everything above 100
+       on the negative range, so it cannot report over 100 degC at all - not a
+       clamp of ours. 0x81 and 0x82 are its two external probes, T1 and T2. */
+    int8_t   internalTempC;                  /* 0x80, the JK's power tube */
+    int8_t   contactorTempC;                 /* 0x81, external probe T1   */
+    int8_t   controlBowlTempC;               /* 0x82, external probe T2   */
     uint16_t cycles;                         /* 0x87                      */
     uint8_t  protocolVersion;                /* 0xc0, selects 0x84 encoding */
 } JK_Data_t;

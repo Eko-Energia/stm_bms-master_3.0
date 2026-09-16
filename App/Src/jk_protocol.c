@@ -12,7 +12,7 @@
 /* Publishing bounds: the narrower of the JK register range and the CAN_DB
    signal range. A value outside them is a corrupt register, not a reading,
    so the frame is rejected rather than clamped into something plausible. */
-#define JKP_TEMP_RAW_MAX    (140u)    /* 0x80/0x81, 140 = -40 degC            */
+#define JKP_TEMP_RAW_MAX    (140u)    /* 0x80/0x81/0x82, 140 = -40 degC       */
 #define JKP_SOC_MAX_PCT     (100u)    /* 0x85                                 */
 #define JKP_CENTIVOLTS_MAX  (10000u)  /* 0x83, BMSMaster_JK_PackVoltage       */
 #define JKP_CENTIAMPS_MAX   (30000)   /* 0x84, BMSMaster_JK_PackCurrent       */
@@ -57,8 +57,12 @@ static uint32_t be32(const uint8_t *p)
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
 
-/* 0-100 is positive degC directly; 101-140 is negative, 101 = -1. Any higher
-   raw is undefined and would truncate into int8_t, half of it as a positive. */
+/* The JK's own encoding, not a bias anyone added on the way: 0-100 is positive
+   degC directly and 101-140 is negative, 101 = -1 up to 140 = -40. Nothing
+   above 100 degC is representable, which is the cost of fitting a signed value
+   into an unsigned field. Verified against syssi/esphome-jk-bms, which carries
+   the same table from the vendor. A higher raw is undefined and would truncate
+   into int8_t, half of it landing as a positive. */
 static bool decodeTemp(uint16_t raw, int8_t *out)
 {
     if (raw > JKP_TEMP_RAW_MAX) {
@@ -194,8 +198,9 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
         const uint8_t *v = &buf[i + 1u];
 
         switch (ident) {
-        case 0x80u: if (!decodeTemp(be16(v), &d.mosTempC)) { return false; } break;
-        case 0x81u: if (!decodeTemp(be16(v), &d.balTempC)) { return false; } break;
+        case 0x80u: if (!decodeTemp(be16(v), &d.internalTempC))   { return false; } break;
+        case 0x81u: if (!decodeTemp(be16(v), &d.contactorTempC))  { return false; } break;
+        case 0x82u: if (!decodeTemp(be16(v), &d.controlBowlTempC)) { return false; } break;
         case 0x83u: {
             const uint16_t centivolts = be16(v);
             if (centivolts > JKP_CENTIVOLTS_MAX) { return false; }

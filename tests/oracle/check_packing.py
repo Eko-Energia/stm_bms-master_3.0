@@ -71,11 +71,6 @@ def _therm_expected(therm_index: int) -> dict:
             else raw[(m, therm_index)] * THERM_SCALE
         for m in range(1, 8)
     }
-    if therm_index == 9:
-        # docs/CAN-DATABASE/CAN_DB.dbc has a typo for this one signal:
-        # "BMSMaster_PCB13herm9Temp" instead of "BMSMaster_PCB3Therm9Temp".
-        # Not our bug to fix here - match the DBC as it stands.
-        result["BMSMaster_PCB13herm9Temp"] = result.pop("BMSMaster_PCB3Therm9Temp")
     return result
 
 
@@ -114,8 +109,9 @@ EXPECTED = {
     0x091: _cell_mv(17, 20),
     0x092: _cell_mv(21, 21),
     0x093: {                                    # BMSMaster_JK_Temp
-        "BMSMaster_JK_MosTemp": 45,
-        "BMSMaster_JK_BalTemp": -5,
+        "BMSMaster_JK_InternalTemp": 45,
+        "BMSMaster_JK_ContactorTemp": -5,
+        "BMSMaster_JK_ControlBowlTemp": 30,
     },
     0x094: {                                    # BMSMaster_JK_CycleStats
         "BMSMaster_JK_Cycles": 1234,
@@ -129,7 +125,7 @@ if _sends_master_measurements():
     EXPECTED[0x082] = {                         # BMSMaster_MasterVoltCurrTemp
         "BMSMaster_MasterBatteryVoltage": 73.1,
         "BMSMaster_MasterBatteryCurrent": 25.0, # positive: ADC's own signed spot-check
-        "BMSMaste_MasterBatteryTemperatur": 37.0,
+        "BMSMaster_MasterBatteryTemperature": 37.0,
     }
 
 

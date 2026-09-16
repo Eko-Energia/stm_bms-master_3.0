@@ -58,7 +58,7 @@ static void getMeasurements(uint8_t *data, void *ctx)
     BMSMaster_MasterVoltCurrTemp_init(&frameMeas);
     frameMeas.BMSMaster_MasterBatteryVoltage   = ADC_PackDecivolts();
     frameMeas.BMSMaster_MasterBatteryCurrent   = ADC_PackDeciamps();
-    frameMeas.BMSMaste_MasterBatteryTemperatur = ADC_TempCenti();
+    frameMeas.BMSMaster_MasterBatteryTemperature = ADC_TempCenti();
     (void)BMSMaster_MasterVoltCurrTemp_pack(data, &frameMeas,
                                             BMSMASTER_MASTERVOLTCURRTEMP_LENGTH);
 }
@@ -110,8 +110,9 @@ static void getJkTemp(uint8_t *data, void *ctx)
     (void)ctx;
     const JK_Data_t *d = JK_Data();
     BMSMaster_JK_Temp_init(&frameJkTemp);
-    frameJkTemp.BMSMaster_JK_MosTemp = d->mosTempC;
-    frameJkTemp.BMSMaster_JK_BalTemp = d->balTempC;
+    frameJkTemp.BMSMaster_JK_InternalTemp    = d->internalTempC;
+    frameJkTemp.BMSMaster_JK_ContactorTemp   = d->contactorTempC;
+    frameJkTemp.BMSMaster_JK_ControlBowlTemp = d->controlBowlTempC;
     (void)BMSMaster_JK_Temp_pack(data, &frameJkTemp, BMSMASTER_JK_TEMP_LENGTH);
 }
 
