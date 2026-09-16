@@ -57,6 +57,17 @@ static void setDirection(GPIO_PinState de, GPIO_PinState re)
    72 MHz, whatever the compiler makes of the loop. */
 #define JK_DE_SETTLE_LOOPS (300u)
 
+/* Pack limits, from the BMSMaster_MasterVoltCurrTemp signal ranges. They key on
+   the JK because it measures the cells directly; the master's own divider reads
+   30 % low and its Hall sensor is not wired (docs/adc.md).
+   JKP_CENTIAMPS_MAX is also 30000, so the decoder rejects any frame past this
+   current outright: the test is >= rather than > so the limit is reachable at
+   all. Give this a real operational limit below 300 A and an over-current is
+   caught with margin instead of exactly at the edge. */
+#define PACK_VOLT_MIN_CV    (6300u)    /* 63.0 V */
+#define PACK_VOLT_MAX_CV    (8700u)    /* 87.0 V */
+#define PACK_CURRENT_MAX_CA (30000)    /* 300.0 A */
+
 #define JK_REASON_FRAME   (0u)   /* detail = received length */
 #define JK_REASON_LINE    (1u)   /* detail = USART error bits: PE 1, NE 2, FE 4, ORE 8 */
 
@@ -80,6 +91,35 @@ static void report(uint16_t code, uint8_t detail)
     }
 }
 
+/* Codes 6 and 7 against the JK's own reading, in the decivolt and deciamp units
+   the error payloads have always used. Evaluated once per decoded frame, which
+   is the rate the data actually changes at. */
+static void evaluatePackLimits(void)
+{
+    if (ehandler == NULL) { return; }
+
+    /* Every field is optional in the TLV walk, so a frame without 0x83 decodes
+       to 0. A live pack is never 0.00 V, so that means absent, not flat. */
+    const uint16_t dv = (uint16_t)((data.packCentivolts + 5u) / 10u);
+    if (data.packCentivolts == 0u) {
+        EH_clear(ehandler, BMS_ERR_PACK_VOLT_RANGE);
+    } else if (data.packCentivolts < PACK_VOLT_MIN_CV
+               || data.packCentivolts > PACK_VOLT_MAX_CV) {
+        const uint8_t blob[5] = { (uint8_t)(dv & 0xFFu), (uint8_t)(dv >> 8), 0u, 0u, 0u };
+        EH_reportEx(ehandler, BMS_ERR_PACK_VOLT_RANGE, ERROR_SEVERITY_ERROR, blob, 2u);
+    } else {
+        EH_clear(ehandler, BMS_ERR_PACK_VOLT_RANGE);
+    }
+
+    const int16_t da = (int16_t)(data.packCentiamps / 10);
+    if (data.packCentiamps >= PACK_CURRENT_MAX_CA || data.packCentiamps <= -PACK_CURRENT_MAX_CA) {
+        const uint8_t blob[5] = { (uint8_t)(da & 0xFF), (uint8_t)((da >> 8) & 0xFF), 0u, 0u, 0u };
+        EH_reportEx(ehandler, BMS_ERR_PACK_CURRENT_HIGH, ERROR_SEVERITY_ERROR, blob, 2u);
+    } else {
+        EH_clear(ehandler, BMS_ERR_PACK_CURRENT_HIGH);
+    }
+}
+
 /* Common tail of both failure paths; returns the new consecutive-failure count. */
 static uint8_t endFailedPoll(void)
 {
@@ -88,6 +128,12 @@ static uint8_t endFailedPoll(void)
     if (failCount >= JK_FAIL_LIMIT) {
         /* Three strikes: publish zeroed payloads rather than stale cell voltages. */
         memset(&data, 0, sizeof data);
+    }
+    /* No reading is not an out-of-range reading; codes 4 and 5 cover a dead
+       link on their own. */
+    if (ehandler != NULL) {
+        EH_clear(ehandler, BMS_ERR_PACK_VOLT_RANGE);
+        EH_clear(ehandler, BMS_ERR_PACK_CURRENT_HIGH);
     }
     setDirection(DE_IDLE, RE_LISTENING);
     state = JK_IDLE;
@@ -253,6 +299,7 @@ void JK_Task(uint32_t nowMs)
                     EH_clear(ehandler, BMS_ERR_JK_COMMS_TIMEOUT);
                     EH_clear(ehandler, BMS_ERR_JK_FRAME_INVALID);
                 }
+                evaluatePackLimits();
                 setDirection(DE_IDLE, RE_LISTENING);
                 state = JK_IDLE;
             } else {

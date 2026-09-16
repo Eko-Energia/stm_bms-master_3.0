@@ -500,6 +500,8 @@ static void soakSetTime(uint64_t absMs)
 /* ---- world model --------------------------------------------------------- */
 typedef struct {
     uint16_t adcTemp, adcCurr, adcVolt;
+    uint16_t jkVolts;        /* 0x83 centivolts in the reply         */
+    uint16_t jkCurrRaw;      /* 0x84 raw; offset encoding, 10000 = 0 A */
     /* De-biased counts, i.e. what THERM_Filtered should read. soakWire()
        converts each to the wire byte a PCBCells board would actually send. */
     uint8_t  thermBase;      /* fed to the 61 ordinary thermistors */
@@ -532,6 +534,8 @@ static void soakWorldHealthy(void)
     world.feedActiv = 1;
     world.feedNode  = 1;
     world.jkReply   = 1;
+    world.jkVolts   = 6850u;   /* 68.50 V, inside 63..87 V                      */
+    world.jkCurrRaw = 10000u;  /* offset encoding: 0.00 A                       */
     world.adcRun    = 1;
     world.canRxPath = 1;
     soakProbeReset();
@@ -662,7 +666,8 @@ static void be32put(uint8_t *p, uint32_t v)
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
 }
 
-static uint16_t soakBuildJk(uint8_t *out, int withData, uint16_t packCv, uint8_t soc)
+static uint16_t soakBuildJk(uint8_t *out, int withData, uint16_t packCv, uint8_t soc,
+                            uint16_t currRaw)
 {
     uint16_t i;
     memset(out, 0, 256);
@@ -676,7 +681,7 @@ static uint16_t soakBuildJk(uint8_t *out, int withData, uint16_t packCv, uint8_t
         out[i++] = 0x80u; be16put(&out[i], 30u);     i = (uint16_t)(i + 2u);
         out[i++] = 0x81u; be16put(&out[i], 28u);     i = (uint16_t)(i + 2u);
         out[i++] = 0x83u; be16put(&out[i], packCv);  i = (uint16_t)(i + 2u);
-        out[i++] = 0x84u; be16put(&out[i], 10000u);  i = (uint16_t)(i + 2u);
+        out[i++] = 0x84u; be16put(&out[i], currRaw); i = (uint16_t)(i + 2u);
         out[i++] = 0x85u; out[i++] = soc;
         out[i++] = 0x87u; be16put(&out[i], 42u);     i = (uint16_t)(i + 2u);
         out[i++] = 0x8Au; be16put(&out[i], 21u);     i = (uint16_t)(i + 2u);
@@ -791,8 +796,8 @@ static void soakDriveJk(void)
             jkLastTxSeen = halUartTxCount;
             jkPhase = 1; jkPhaseAtAbs = soakAbsMs;
             /* Every poll is 0x06 read-all, so the reply always carries data. */
-            soakJkLen = soakBuildJk(soakJkBuf, 1,
-                                    6850u, (uint8_t)(50u + soakRndBelow(40u)));
+            soakJkLen = soakBuildJk(soakJkBuf, 1, world.jkVolts,
+                                    (uint8_t)(50u + soakRndBelow(40u)), world.jkCurrRaw);
         }
         return;
     }
@@ -1266,7 +1271,7 @@ static void soakCampaign3(uint64_t passes)
             static const uint16_t sizes[] = { 0u, 1u, 2u, 19u, 20u, 21u, 123u, 338u,
                                               339u, 340u, 510u, 511u, 512u };
             const uint16_t sz = sizes[soakRndBelow((uint32_t)(sizeof sizes / sizeof sizes[0]))];
-            soakJkLen = soakBuildJk(soakJkBuf, 1, 6850u, 55u);
+            soakJkLen = soakBuildJk(soakJkBuf, 1, world.jkVolts, 55u, world.jkCurrRaw);
             if ((r & 0x30u) == 0u) { soakJkBuf[soakRndBelow(120u)] ^= (uint8_t)soakRnd(); }
             soakTraceAdd("storm:jk-rx", sz, 0u);
             const int saved = soakCurPrio;
@@ -1338,8 +1343,9 @@ static void soakApplyFault(int idx, int on)
     case 2u:  world.thermHot = on ? 220u : 100u;  break;   /* raw 220 > 153 limit   */
     case 3u:  world.feedTherm = !on;              break;
     case 4u:  world.jkReply   = !on;              break;
-    case 6u:  world.adcVolt = on ? 2700u : 3000u; break;   /* 61.7 V / 68.6 V       */
-    case 7u:  world.adcCurr = on ? 4000u : 2108u; break;   /* 473 A / 0 A           */
+    /* Codes 6 and 7 read the JK now, not the master's own divider and Hall. */
+    case 6u:  world.jkVolts   = on ? 5000u : 6850u;   break;  /* 50.0 V / 68.5 V  */
+    case 7u:  world.jkCurrRaw = on ? 40000u : 10000u; break;  /* +300.0 A / 0 A   */
     case 8u:  world.adcTemp = on ? 100u : 2100u;  break;   /* below the open guard  */
     case 11u: world.adcRun  = !on;                break;
     default:  break;

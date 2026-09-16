@@ -40,6 +40,41 @@ static uint16_t makeSocResponse(uint8_t *buf, uint8_t soc)
     return n;
 }
 
+static const EH_ActiveError *findByCode(uint16_t code)
+{
+    for (uint8_t i = 0u; i < eh.activeErrorCount; i++) {
+        if (eh.activeErrors[i].errorCode == code) { return &eh.activeErrors[i]; }
+    }
+    return NULL;
+}
+
+/* A cleared fault stays listed until it has reached the bus once, so standing
+   means present and not already flagged for drop. */
+static bool standing(uint16_t code)
+{
+    const EH_ActiveError *e = findByCode(code);
+    return (e != NULL) && (e->pendingClear == 0u);
+}
+
+/* A response carrying only the pack voltage register, in centivolts. */
+static uint16_t makeVoltResponse(uint8_t *buf, uint16_t centivolts)
+{
+    uint16_t n = 0;
+    buf[n++] = 0x4Eu; buf[n++] = 0x57u;
+    const uint16_t total = 23u;
+    buf[n++] = (uint8_t)((total - 2u) >> 8); buf[n++] = (uint8_t)((total - 2u) & 0xFFu);
+    buf[n++] = 0u; buf[n++] = 0u; buf[n++] = 0u; buf[n++] = 0u;
+    buf[n++] = 0x06u; buf[n++] = 0x00u; buf[n++] = 0x01u;
+    buf[n++] = 0x83u; buf[n++] = (uint8_t)(centivolts >> 8); buf[n++] = (uint8_t)(centivolts & 0xFFu);
+    buf[n++] = 0u; buf[n++] = 0u; buf[n++] = 0u; buf[n++] = 0u;
+    buf[n++] = 0x68u;
+    uint16_t sum = 0u;
+    for (uint16_t i = 0; i < n; i++) { sum = (uint16_t)(sum + buf[i]); }
+    buf[n++] = 0u; buf[n++] = 0u;
+    buf[n++] = (uint8_t)(sum >> 8); buf[n++] = (uint8_t)(sum & 0xFFu);
+    return n;
+}
+
 /* A well-formed, checksum-valid frame carrying no TLVs at all. Structurally
    perfect, but 0 % SOC with 21 cells at 0 mV is not a measurement. */
 static uint16_t makeEmptyPayloadFrame(uint8_t *buf)
@@ -579,6 +614,42 @@ TEST(a_half_transfer_event_does_not_end_the_poll)
     CHECK_EQ(JK_Data()->soc, 60u);
 }
 
+/* The master's own divider reads 30 % low and its Hall sensor is not wired, so
+   PACK_VOLT_RANGE keys on the JK's measurement instead of the ADC's. */
+TEST(the_pack_voltage_limit_keys_on_the_jk_reading)
+{
+    setup();
+    uint8_t low[32];  const uint16_t l = makeVoltResponse(low, 5000u);   /* 50.00 V */
+    uint8_t ok[32];   const uint16_t k = makeVoltResponse(ok, 7272u);    /* 72.72 V */
+    uint8_t high[32]; const uint16_t h = makeVoltResponse(high, 9000u);  /* 90.00 V */
+
+    exchange(0u, low, l);
+    CHECK(JK_Valid());
+    CHECK(standing(BMS_ERR_PACK_VOLT_RANGE));
+    CHECK_EQ(findByCode(BMS_ERR_PACK_VOLT_RANGE)->specificData[0], 500u & 0xFFu);
+
+    exchange(1000u, ok, k);                     /* in range: clears */
+    CHECK(!standing(BMS_ERR_PACK_VOLT_RANGE));
+
+    exchange(2000u, high, h);
+    CHECK(standing(BMS_ERR_PACK_VOLT_RANGE));
+
+    /* A dead link is not an out-of-range reading; codes 4 and 5 cover it. */
+    timeout(3000u);
+    CHECK(!standing(BMS_ERR_PACK_VOLT_RANGE));
+}
+
+/* Every TLV is optional, so a reply without 0x83 decodes to 0.00 V. That is an
+   absent register, not a flat pack, and must not raise an under-voltage. */
+TEST(a_reply_without_the_voltage_register_raises_nothing)
+{
+    setup();
+    uint8_t reply[64]; const uint16_t n = makeSocResponse(reply, 60u);
+    exchange(0u, reply, n);
+    CHECK(JK_Valid());
+    CHECK(!standing(BMS_ERR_PACK_VOLT_RANGE));
+}
+
 int main(void)
 {
     RUN(every_poll_is_a_read_all_and_matches_the_reference_implementations);
@@ -605,5 +676,7 @@ int main(void)
     RUN(the_comms_fault_reports_the_post_increment_failure_count);
     RUN(a_frame_error_leaves_the_next_poll_a_read_all);
     RUN(a_half_transfer_event_does_not_end_the_poll);
+    RUN(the_pack_voltage_limit_keys_on_the_jk_reading);
+    RUN(a_reply_without_the_voltage_register_raises_nothing);
     return TEST_SUMMARY();
 }

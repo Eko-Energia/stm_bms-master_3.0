@@ -22,6 +22,11 @@
 #define NTC_OPEN_BELOW    (200u)
 #define NTC_SHORT_ABOVE   (4000u)
 
+/* The Hall sensor is bidirectional: at zero current it sits near mid-scale, and
+   even the most negative reading the database allows is still count 908. A
+   handful of counts is an absent sensor, not a charge current. */
+#define CURRENT_ABSENT_BELOW (100u)
+
 /* Liveness. A scan completes every ~84 us, so 100 ms without one is ~1200
    missed conversions - a stopped DMA, not jitter. Reported before the next
    500 ms publish of frame 130. */
@@ -157,30 +162,23 @@ void ADC_Task(uint32_t nowMs)
     /* Voltage. Max intermediate 4095 * 228554 = 936M, inside uint32. */
     uint32_t dv = (((uint32_t)voltCount * CALIB_PACK_V_NUM) + (CALIB_PACK_V_DEN / 2u))
                   / CALIB_PACK_V_DEN;
-    if (dv < VOLT_MIN_DV || dv > VOLT_MAX_DV) {
-        const uint8_t blob[5] = { (uint8_t)(dv & 0xFFu), (uint8_t)((dv >> 8) & 0xFFu), 0u, 0u, 0u };
-        report(BMS_ERR_PACK_VOLT_RANGE, blob, 2u);
-        dv = (dv < VOLT_MIN_DV) ? VOLT_MIN_DV : VOLT_MAX_DV;
-    } else {
-        clear(BMS_ERR_PACK_VOLT_RANGE);
-    }
+    /* Kept inside the database range; PACK_VOLT_RANGE is raised by app_jk.c
+       against the JK's own measurement, not this one. */
+    if (dv < VOLT_MIN_DV)      { dv = VOLT_MIN_DV; }
+    else if (dv > VOLT_MAX_DV) { dv = VOLT_MAX_DV; }
     packDecivolts = (uint16_t)dv;
 
     /* Current. Rounded away from zero so the sign is symmetric. */
-    const int32_t delta = (int32_t)currCount - CALIB_CURRENT_OFFSET;
-    int32_t da = delta * CALIB_CURRENT_NUM;
-    da = (da >= 0) ? ((da + (CALIB_CURRENT_DEN / 2)) / CALIB_CURRENT_DEN)
-                   : ((da - (CALIB_CURRENT_DEN / 2)) / CALIB_CURRENT_DEN);
-    if (da > CURRENT_MAX_DA || da < -CURRENT_MAX_DA) {
-        /* & 0xFF/>>8 safe: 12-bit ADC bounds da well within int16. The right
-           shift of a possibly-negative da relies on GCC/ARM's arithmetic-shift
-           definition, not standard C (implementation-defined) - fine on this
-           fixed toolchain/target. */
-        const uint8_t blob[5] = { (uint8_t)(da & 0xFF), (uint8_t)((da >> 8) & 0xFF), 0u, 0u, 0u };
-        report(BMS_ERR_PACK_CURRENT_HIGH, blob, 2u);
-        da = (da > 0) ? CURRENT_MAX_DA : -CURRENT_MAX_DA;
+    int32_t da;
+    if (currCount < CURRENT_ABSENT_BELOW) {
+        da = 0;                            /* no sensor on the pin: 0.0 A */
     } else {
-        clear(BMS_ERR_PACK_CURRENT_HIGH);
+        const int32_t delta = (int32_t)currCount - CALIB_CURRENT_OFFSET;
+        da = delta * CALIB_CURRENT_NUM;
+        da = (da >= 0) ? ((da + (CALIB_CURRENT_DEN / 2)) / CALIB_CURRENT_DEN)
+                       : ((da - (CALIB_CURRENT_DEN / 2)) / CALIB_CURRENT_DEN);
+        if (da > CURRENT_MAX_DA)       { da = CURRENT_MAX_DA;  }
+        else if (da < -CURRENT_MAX_DA) { da = -CURRENT_MAX_DA; }
     }
     packDeciamps = (int16_t)da;
 
