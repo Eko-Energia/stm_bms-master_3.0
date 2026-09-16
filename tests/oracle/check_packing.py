@@ -96,7 +96,7 @@ EXPECTED = {
     },
     0x08C: {                                    # BMSMaster_JK_Pack
         "BMSMaster_JK_PackVoltage": 72.56,
-        "BMSMaster_JK_PackCurrent": -20.0,      # negative: JK's own signed spot-check
+        "BMSMaster_JK_PackCurrent": 20.0,       # bit15 set is charging, so positive
         "BMSMaster_JK_SOC": 77,
         "BMSMaster_JK_SOH": 88,
         "BMSMaster_JK_StatusFlags": 1,

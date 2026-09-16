@@ -1335,7 +1335,7 @@ static const SoakFaultSpec soakFaults[] = {
     { "PCBCells module silent",            3u,  7000u,  4000u },
     { "JK link loss",                      4u,  7000u,  6000u },
     { "pack voltage out of range",         6u, 20000u,  2000u },
-    { "pack current above 300 A",          7u, 20000u,  2000u },
+    { "pack current at 350 A",             7u, 20000u,  2000u },
     /* Gated with the frame it describes: unpublished, it is never raised. */
 #if CALIB_SEND_MASTER_MEASUREMENTS
     { "on-board NTC open",                 8u, 20000u,  2000u },
@@ -1355,7 +1355,7 @@ static void soakApplyFault(int idx, int on)
     case 4u:  world.jkReply   = !on;              break;
     /* Codes 6 and 7 read the JK now, not the master's own divider and Hall. */
     case 6u:  world.jkVolts   = on ? 5000u : 6850u;   break;  /* 50.0 V / 68.5 V  */
-    case 7u:  world.jkCurrRaw = on ? 40000u : 10000u; break;  /* +300.0 A / 0 A   */
+    case 7u:  world.jkCurrRaw = on ? 45000u : 10000u; break;  /* -350.0 A / 0 A   */
     case 8u:  world.adcTemp = on ? 100u : 2100u;  break;   /* below the open guard  */
     case 11u: world.adcRun  = !on;                break;
     default:  break;

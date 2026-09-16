@@ -387,7 +387,7 @@ upstream; the fault bands above still catch an open or shorted sensor.
 
 ### 5.5 Range handling
 
-Values outside the DBC range (63-87 V, +/-300 A, 0-100 degC) are detected with the generated
+Values outside the DBC range (63-87 V, +/-350 A, 0-100 degC) are detected with the generated
 `<Signal>_is_in_range()` helpers, **clamped** to the range before packing, and raise
 `PACK_VOLT_RANGE` or `PACK_CURRENT_HIGH` with the true unclamped value in
 `Error_Specific_Data`. The bus never carries out-of-spec values.
@@ -681,7 +681,7 @@ currents.
 | CAN signal | JK register | Conversion |
 | --- | --- | --- |
 | `JK_PackVoltage` (0.01 V) | `0x83` | direct; both are 10 mV/LSB |
-| `JK_PackCurrent` (0.01 A) | `0x84` | `0xC0`=0: `10000 - raw`. `0xC0`=1: bit15 direction, bits14..0 magnitude in 10 mA. **Then negated** - see below |
+| `JK_PackCurrent` (0.1 A) | `0x84` | `0xC0`=0: `10000 - raw`. `0xC0`=1: bit15 set is charging, bits14..0 magnitude in 10 mA. Scaled to deciamps: 0.01 A cannot reach 350 A in an `int16` |
 | `JK_SOC` (%) | `0x85` | direct |
 | `JK_SOH` (%) | `0xb9` / `0xaa` | **derived**: actual capacity / capacity setting x 100, clamped to 100 up to 110 %. The protocol has no SOH register. |
 | `JK_Cell1..21_mV` | `0x79` | direct, mV; cell count = length / 3 |
@@ -693,19 +693,19 @@ currents.
 | `JK_ModeFlags` | `0x8c` | bits 0-3 only; bits 4-15 are reserved and masked off |
 | `JK_StatusFlags` | `0x8b` | **curated 8-bit summary** - see below |
 
-**Current sign convention.** The JK protocol yields positive = charging, while
-`docs/notionSpec.md` defines the ADC current as positive = **discharging**. The JK value is
-therefore **negated** so both signals use positive = discharging.
+**Current sign convention.** Positive is **charging**, negative **discharging**, on both
+`BMSMaster_MasterBatteryCurrent` and `BMSMaster_JK_PackCurrent`. That is the JK's own sign,
+passed through unaltered, so the database, this firmware and the JK's app all read the same way.
 
-The reason is not merely consistency: the two signals measure the *same physical current by
-different means* - the Hall sensor on PC1 and the JK's internal shunt - so matching signs makes
-them directly comparable, which is a usable cross-check for a drifting Hall sensor. Opposite
-signs would make that comparison silently wrong.
+Matching signs matter because the two signals measure the *same physical current by different
+means* - the Hall sensor on PC1 and the JK's internal shunt - which makes them a usable
+cross-check against each other. The convention is recorded in the database as `CM_` comments on
+both signals, so it is authoritative rather than a firmware choice.
 
-The convention is recorded in the database itself, as `CM_` comments on both
-`BMSMaster_MasterBatteryCurrent` and `BMSMaster_JK_PackCurrent` (PR #46), so it is authoritative
-rather than an undocumented firmware choice. The old `stm_bms-master` sets no precedent: it never
-implemented the JK link at all.
+> [!WARNING]
+> The Hall sensor's direction has never been confirmed: PC1 reads 2 counts, so it is not
+> connected, and `(count - offset) x gain` has never been checked against a known current. The
+> master's signal claims this convention; nothing has verified it.
 
 **Warning flags.** `0x8b` defines 14 bits but `JK_StatusFlags` is `u8`. Truncating to the low
 byte would silently drop b10/b11, monomer over- and under-voltage, which are the cell-level
@@ -733,7 +733,7 @@ data - a loud, diagnosable failure instead of a silent wrong reading.
 | `0x79` block | length a multiple of 3, at most 21 cells, cell number 1-21 | reject |
 | `0x80` / `0x81` | raw 0-140 (0-100 degC, 101-140 = -1..-40 degC) | reject |
 | `0x83` | 0-10000 centivolts (`JK_PackVoltage` is 0-100.00 V) | reject |
-| `0x84` | +/-30000 centiamps (`JK_PackCurrent`, and the Hall sensor, are +/-300 A) | reject |
+| `0x84` | +/-3500 deciamps (`JK_PackCurrent`, and the Hall sensor, are +/-350 A) | reject |
 | `0x85` | 0-100 % | reject |
 | `0x8a` | 3-32 per the register, and at most 21 for this pack | reject |
 | `0x8c` | bits 0-3 | mask |

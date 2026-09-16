@@ -13,7 +13,7 @@
 /** Decoded JK state. Scales match the CAN_DB signals so packing is a copy. */
 typedef struct {
     uint16_t packCentivolts;                 /* 0x83, 10 mV/LSB           */
-    int16_t  packCentiamps;                  /* 0x84, positive = DISCHARGING */
+    int16_t  packDeciamps;                   /* 0x84, positive = CHARGING */
     uint8_t  soc;                            /* 0x85, %                   */
     uint8_t  soh;                            /* derived from 0xb9 / 0xaa  */
     uint8_t  statusFlags;                    /* curated summary of 0x8b   */

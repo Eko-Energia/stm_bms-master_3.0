@@ -81,7 +81,7 @@ and `EKO_Drivers/CAN/Src/` (`CAN_DB.c`, `CAN2_DB.c`), alongside the hand-written
 ([can.md](can.md)) — the generated files are the frame layer that sits on top of it. Never
 hand-edit them; regenerate from the database instead.
 
-The committed sources are generated from `master` of `docs/CAN-DATABASE`, currently `bbd5c83`.
+The committed sources are generated from `master` of `docs/CAN-DATABASE`, currently `5ce08cc`.
 Re-pin the submodule and regenerate whenever the database moves.
 
 Useful flags: `--bit-fields` to minimise struct sizes, `--use-float` for single-precision

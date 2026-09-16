@@ -67,37 +67,37 @@ TEST(pack_voltage_and_soc_decode_directly)
     CHECK_EQ(d.soc, 85u);
 }
 
-TEST(current_offset_encoding_is_negated_to_positive_equals_discharging)
+TEST(current_offset_encoding_keeps_the_jk_sign)
 {
     uint8_t buf[64];
     JK_Data_t d;
 
-    /* 0xC0 = 0: JK reports 11000 for 10 A discharge. Positive-discharging
-       means we must publish +1000 centiamps. */
+    /* 0xC0 = 0: JK reports 11000 for 10 A discharge. Discharging is negative,
+       and the signal carries 0.1 A, so -100 deciamps. */
     const uint8_t discharge[6] = { 0xC0u, 0x00u, 0x84u, 0x2Au, 0xF8u, 0x00u };
     CHECK(JKP_Decode(buf, makeResponse(buf, discharge, 5u), &d));
-    CHECK_EQ(d.packCentiamps, 1000);
+    CHECK_EQ(d.packDeciamps, -100);
 
-    /* JK reports 9500 for 5 A charge -> -500 centiamps. */
+    /* JK reports 9500 for 5 A charge -> +50 deciamps. */
     const uint8_t charge[6] = { 0xC0u, 0x00u, 0x84u, 0x25u, 0x1Cu, 0x00u };
     CHECK(JKP_Decode(buf, makeResponse(buf, charge, 5u), &d));
-    CHECK_EQ(d.packCentiamps, -500);
+    CHECK_EQ(d.packDeciamps, 50);
 }
 
-TEST(current_sign_bit_encoding_is_also_negated)
+TEST(current_sign_bit_encoding_keeps_the_jk_sign)
 {
     uint8_t buf[64];
     JK_Data_t d;
 
-    /* 0xC0 = 1: 0x07D0 = 2000 with bit15 clear = 20 A discharge -> +2000. */
+    /* 0xC0 = 1: 0x07D0 = 2000 with bit15 clear is 20 A discharge -> -200. */
     const uint8_t discharge[6] = { 0xC0u, 0x01u, 0x84u, 0x07u, 0xD0u, 0x00u };
     CHECK(JKP_Decode(buf, makeResponse(buf, discharge, 5u), &d));
-    CHECK_EQ(d.packCentiamps, 2000);
+    CHECK_EQ(d.packDeciamps, -200);
 
-    /* 0x87D0 = bit15 set = 20 A charge -> -2000. */
+    /* 0x87D0 = bit15 set is 20 A charge -> +200. */
     const uint8_t charge[6] = { 0xC0u, 0x01u, 0x84u, 0x87u, 0xD0u, 0x00u };
     CHECK(JKP_Decode(buf, makeResponse(buf, charge, 5u), &d));
-    CHECK_EQ(d.packCentiamps, -2000);
+    CHECK_EQ(d.packDeciamps, 200);
 }
 
 TEST(cell_voltages_walk_the_length_prefixed_block)
@@ -351,18 +351,18 @@ TEST(a_current_outside_the_pack_range_rejects_the_frame)
 {
     uint8_t buf[64];
     JK_Data_t d;
-    /* Offset encoding: raw 40000 is exactly +300.00 A, the sensor's limit. */
-    const uint8_t edge[5] = { 0xC0u, 0x00u, 0x84u, 0x9Cu, 0x40u };
+    /* Offset encoding: raw 45000 is exactly -350.0 A, the pack's limit. */
+    const uint8_t edge[5] = { 0xC0u, 0x00u, 0x84u, 0xAFu, 0xC8u };
     CHECK(JKP_Decode(buf, makeResponse(buf, edge, sizeof edge), &d));
-    CHECK_EQ(d.packCentiamps, 30000);
+    CHECK_EQ(d.packDeciamps, -3500);
 
-    /* raw 0xffff is +55535 centiamps; narrowed to int16_t it publishes
-       -10001, a 100 A discharge reported as a charge. */
+    /* raw 0xffff is -55535 centiamps, past the limit in the other direction. */
     const uint8_t wrap[5] = { 0xC0u, 0x00u, 0x84u, 0xFFu, 0xFFu };
     CHECK(!JKP_Decode(buf, makeResponse(buf, wrap, sizeof wrap), &d));
 
-    /* Sign-bit encoding: 32767 fits int16_t but not a +/-300 A pack. */
-    const uint8_t big[5] = { 0xC0u, 0x01u, 0x84u, 0x7Fu, 0xFFu };
+    /* Offset encoding, raw 0: +100.00 A short of nothing - 10000 centiamps is
+       +1000 deciamps, well inside. Use raw 46000 instead, -360.0 A. */
+    const uint8_t big[5] = { 0xC0u, 0x00u, 0x84u, 0xB3u, 0xB0u };
     CHECK(!JKP_Decode(buf, makeResponse(buf, big, sizeof big), &d));
 }
 
@@ -533,8 +533,8 @@ int main(void)
     RUN(read_all_request_matches_the_documented_bytes);
     RUN(validate_rejects_malformed_frames);
     RUN(pack_voltage_and_soc_decode_directly);
-    RUN(current_offset_encoding_is_negated_to_positive_equals_discharging);
-    RUN(current_sign_bit_encoding_is_also_negated);
+    RUN(current_offset_encoding_keeps_the_jk_sign);
+    RUN(current_sign_bit_encoding_keeps_the_jk_sign);
     RUN(cell_voltages_walk_the_length_prefixed_block);
     RUN(cell_voltages_accept_a_single_cell);
     RUN(cell_voltages_accept_the_full_21_cell_pack);

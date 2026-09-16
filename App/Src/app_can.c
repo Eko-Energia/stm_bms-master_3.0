@@ -81,7 +81,7 @@ static void getJkPack(uint8_t *data, void *ctx)
     const JK_Data_t *d = JK_Data();
     BMSMaster_JK_Pack_init(&frameJkPack);
     frameJkPack.BMSMaster_JK_PackVoltage = d->packCentivolts;
-    frameJkPack.BMSMaster_JK_PackCurrent = d->packCentiamps;
+    frameJkPack.BMSMaster_JK_PackCurrent = d->packDeciamps;
     frameJkPack.BMSMaster_JK_SOC         = d->soc;
     frameJkPack.BMSMaster_JK_SOH         = d->soh;
     frameJkPack.BMSMaster_JK_StatusFlags = d->statusFlags;

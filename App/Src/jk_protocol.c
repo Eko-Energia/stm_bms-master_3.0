@@ -15,7 +15,7 @@
 #define JKP_TEMP_RAW_MAX    (140u)    /* 0x80/0x81/0x82, 140 = -40 degC       */
 #define JKP_SOC_MAX_PCT     (100u)    /* 0x85                                 */
 #define JKP_CENTIVOLTS_MAX  (10000u)  /* 0x83, BMSMaster_JK_PackVoltage       */
-#define JKP_CENTIAMPS_MAX   (30000)   /* 0x84, BMSMaster_JK_PackCurrent       */
+#define JKP_DECIAMPS_MAX    (3500)    /* 0x84, BMSMaster_JK_PackCurrent       */
 #define JKP_STRINGS_MIN     (3u)      /* 0x8a, protocol range is 3..32        */
 #define JKP_MODE_FLAGS_MASK (0x0Fu)   /* 0x8c, bits 4..15 are reserved        */
 #define JKP_SOH_MAX_PCT     (110u)    /* slightly over rated is real, far over is not */
@@ -233,26 +233,31 @@ bool JKP_Decode(const uint8_t *buf, uint16_t len, JK_Data_t *out)
     }
 
     /*
-     * Current, negated so positive means DISCHARGING - matching the CAN
-     * signal and the Hall sensor, so the two current sources can be compared
-     * directly. The JK itself uses the opposite sign.
+     * Current in the JK's own sign: positive is CHARGING, negative discharging.
+     * Bit 15 set is the charging direction (syssi/esphome-jk-bms decodes 0x84
+     * the same way and feeds it to a charging power sensor).
      * 0xc0 selects between the two encodings and is indistinguishable at low
      * current, which is why it must be parsed before this runs.
-     * Computed in int32_t: the offset encoding reaches +55535 centiamps, which
-     * wraps to a charging current if narrowed straight to int16_t.
+     * Computed in int32_t: the offset encoding reaches -55535 centiamps, which
+     * wraps to the opposite direction if narrowed straight to int16_t.
      */
     if (haveCurrent) {
         int32_t centiamps;
         if (d.protocolVersion == 0x01u) {
             const int32_t mag = (int32_t)(currentRaw & 0x7FFFu);
-            centiamps = (currentRaw & 0x8000u) ? -mag : mag;
+            centiamps = (currentRaw & 0x8000u) ? mag : -mag;
         } else {
-            centiamps = (int32_t)currentRaw - 10000;
+            centiamps = 10000 - (int32_t)currentRaw;
         }
-        if (centiamps < -JKP_CENTIAMPS_MAX || centiamps > JKP_CENTIAMPS_MAX) {
+        /* The signal carries 0.1 A: 0.01 A cannot reach 350 A in an int16.
+           Rounded away from zero so a reading never crosses to the other
+           direction on the way down. */
+        const int32_t deciamps = (centiamps >= 0) ? ((centiamps + 5) / 10)
+                                                  : ((centiamps - 5) / 10);
+        if (deciamps < -JKP_DECIAMPS_MAX || deciamps > JKP_DECIAMPS_MAX) {
             return false;
         }
-        d.packCentiamps = (int16_t)centiamps;
+        d.packDeciamps = (int16_t)deciamps;
     }
 
     /* The protocol has no SOH register; this is the only health figure it exposes.

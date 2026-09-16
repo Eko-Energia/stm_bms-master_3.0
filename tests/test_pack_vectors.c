@@ -184,8 +184,8 @@ TEST(dump_vectors_for_the_oracle)
     /* Echo the values the oracle must reproduce. */
     printf("  voltage=%u dV current=%d dA temp=%u cdegC\n",
            ADC_PackDecivolts(), ADC_PackDeciamps(), ADC_TempCenti());
-    printf("  jk pack=%u cV current=%d cA soc=%u soh=%u cycles=%u\n",
-           JK_Data()->packCentivolts, JK_Data()->packCentiamps,
+    printf("  jk pack=%u cV current=%d dA soc=%u soh=%u cycles=%u\n",
+           JK_Data()->packCentivolts, JK_Data()->packDeciamps,
            JK_Data()->soc, JK_Data()->soh, JK_Data()->cycles);
 }
 
