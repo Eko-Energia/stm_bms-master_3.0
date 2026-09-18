@@ -18,7 +18,12 @@ The configuration is stored in `BMS-Master.ioc`.
 | GPIO | Relay, fan, transceiver enables, standby, LEDs, and status inputs |
 | SWD | Debug interface on PA13/PA14 |
 
-The clock setup uses the internal 8 MHz HSI, divides it by two, and multiplies by nine for a 36 MHz system clock. ADC clocking is PCLK2 divided by four.
+The clock setup uses a **16 MHz external oscillator in BYPASS mode** (`HSE`, `PD0-OSC_IN`), not
+the internal HSI, PLL-multiplied to a **72 MHz** system clock (`RCC.HSE_VALUE=16000000`,
+`RCC.AHBFreq_Value=72000000` in `BMS-Master.ioc`). `PD1-OSC_OUT` is assigned but not wired -
+BYPASS mode drives the oscillator input directly and does not use the MCU's inverting amplifier,
+so `OSC_OUT` is reserved rather than in use; see [pcb.md](pcb.md). ADC clocking is **PCLK2 divided
+by eight** (`RCC.ADCPresc=RCC_ADCPCLK2_DIV8`), giving a 9 MHz ADC clock, not PCLK2/4.
 
 ## Directory map
 
@@ -36,9 +41,15 @@ stm_bms-master_3.0/
 
 ## Runtime startup
 
-The generated `main()` initializes HAL, the system clock, GPIO, DMA, ADC1, CAN1, CAN2, USART1, and TIM3. It enables the configured interrupts and enters an empty loop. This is deliberate for the clean project: application objects and periodic calls still need to be added.
+`main()` initializes HAL, the system clock, GPIO, DMA, ADC1, CAN1, CAN2, USART1, and TIM3, enables
+the configured interrupts, and then calls **`app_main()`** (`App/Src/app.c`) instead of entering
+an empty loop. `app_main()` runs module `Init` calls once and then the cooperative superloop
+forever - it never returns. `main.c` gains three lines for this: `#include "app.h"`, `app_main();`
+in `USER CODE BEGIN 2`, and `App_OnFatalError();` in `USER CODE BEGIN Error_Handler_Debug`.
 
-The original project adds the application layer under `BMS_Driver`. That layer owns the BMS object, ADC conversions, CAN scheduling, error handling, and PWM operating modes.
+The application layer - ADC conversions, CAN scheduling, error handling, the JK link, the
+thermistor and contactor logic - lives in `App/` (`app_*.c`/`.h`), not in a copied `BMS_Driver`
+tree from the original project. See [firmwareSpec.md](firmwareSpec.md) for the full module map.
 
 ## Integration checklist
 
