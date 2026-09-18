@@ -16,7 +16,7 @@
 #define BMS_ERR_JK_COMMS_TIMEOUT     (4u)  /* no valid JK response                   */
 #define BMS_ERR_JK_FRAME_INVALID     (5u)  /* JK frame failed validation             */
 #define BMS_ERR_PACK_VOLT_RANGE      (6u)  /* JK pack voltage outside 63-87 V        */
-#define BMS_ERR_PACK_CURRENT_HIGH    (7u)  /* JK pack current at or above 300 A      */
+#define BMS_ERR_PACK_CURRENT_HIGH    (7u)  /* JK pack current at or above 350 A      */
 #define BMS_ERR_TEMP_SENSOR_FAULT    (8u)  /* on-board NTC open or shorted           */
 #define BMS_ERR_CAN1_TX_FAIL         (9u)  /* TX mailboxes blocked                   */
 #define BMS_ERR_FATAL_INIT           (10u) /* peripheral init failed; Error_Handler reached */
