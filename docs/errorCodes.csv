@@ -5,7 +5,7 @@ BMS Master,3,CAN2_MODULE_SILENT,PCB Cells module stopped sending thermistor fram
 BMS Master,4,JK_COMMS_TIMEOUT,No valid response from JK BMS,ERROR
 BMS Master,5,JK_FRAME_INVALID,JK BMS frame failed validation,WARNING
 BMS Master,6,PACK_VOLT_RANGE,JK pack voltage outside 63-87 V,ERROR
-BMS Master,7,PACK_CURRENT_HIGH,JK pack current at or above 300 A,ERROR
+BMS Master,7,PACK_CURRENT_HIGH,JK pack current at or above 350 A in either direction,ERROR
 BMS Master,8,TEMP_SENSOR_FAULT,On-board thermistor open or shorted,ERROR
 BMS Master,9,CAN1_TX_FAIL,CAN1 frame could not be transmitted,WARNING
 BMS Master,10,FATAL_INIT,"Peripheral initialisation failed, node halted",ERROR
