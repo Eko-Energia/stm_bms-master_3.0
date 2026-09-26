@@ -16,7 +16,11 @@ With a timer clock of approximately 72 MHz:
 
 $$f_{PWM} = \frac{72\,MHz}{(71 + 1)(999 + 1)} = 1\,kHz$$
 
-`Core/Src/tim.c` contains an important user-code override. CubeMX may initially configure channel 3 as output-compare timing, but the code changes it to `TIM_OCMODE_PWM1` with `HAL_TIM_PWM_ConfigChannel()`. This is what makes PB0 a real PWM output.
+`Core/Src/tim.c` has **no** user-code override. Every `USER CODE` section in the file is empty.
+`BMS-Master.ioc` configures `PWM Generation CH3` directly on TIM3 (`SH.S_TIM3_CH3.0=TIM3_CH3,PWM
+Generation3 CH3`), so CubeMX itself generates `HAL_TIM_PWM_Init()` and
+`HAL_TIM_PWM_ConfigChannel()` with `sConfigOC.OCMode = TIM_OCMODE_PWM1` - what makes PB0 a real
+PWM output is the `.ioc` setting, not an application-layer patch.
 
 ## Duty-cycle generation
 
@@ -35,23 +39,32 @@ PWM_Out_setDuty(&relay, 50.0f);
 
 `PWM_Out_Init()` stores the timer handle and channel, writes the initial compare value, starts the channel when needed, enables the timer, resets the counter, and generates an update event so the first active cycle uses the requested duty.
 
-## BMS relay use case
+The EKO driver's `PWM_Out_setDuty()` uses `roundf()`, not `round()` (a `double` function), to
+keep the conversion single-precision - the toolchain target has no FPU, so any `double` arithmetic
+pulls in soft-float library calls.
 
-The original BMS wrapper in `BMS_PWM.c` uses:
+## Contactor relay use case (`App/Src/app_contactor.c`)
 
-1. 100% duty at 1 kHz during startup.
-2. A 2 second startup period.
-3. 50% duty at 1 kHz during operation.
+The application-layer contactor state machine does **not** call `PWM_Out_setDuty()` on its
+state-change path. It writes the timer compare register directly with
+`__HAL_TIM_SET_COMPARE(timer, TIM_CHANNEL_3, ccr)`, using pre-computed compare-value constants
+rather than a duty percentage:
 
-```c
-BMS_PWM_Init(&bms, &htim3);
+| State | `CCR` | Duty |
+| --- | ---: | ---: |
+| `CCR_PULL_IN` | 999 | 100 % |
+| `CCR_HOLD` | 500 | 50 % |
+| `CCR_OPEN` | 0 | 0 % |
 
-for (;;) {
-    BMS_PWM_NormalMode(&bms);
-}
-```
+Setting compare values directly, rather than converting a percentage through
+`PWM_Out_setDuty()`'s `roundf()` call on every transition, keeps floating-point arithmetic off
+the safety-relevant open/close path. `PWM_Out_Init()` is still called once at startup - it writes
+the CCR preload and forces the update event so the first active cycle is correct - but the
+running state machine only ever writes `CCR` directly afterward.
 
-The clean copied project has the correct low-level timer configuration and EKO PWM driver, but it does not contain the original BMS wrapper or a call from `main()`. Add that application layer when relay startup and operational states are required.
+Sequence: 100 % duty for 2 s on every transition to closed (coil pull-in), then 50 % to hold;
+0 % whenever open. See [firmwareSpec.md](firmwareSpec.md) section 8 for the full contactor and
+safe-state state machine.
 
 ## Correctness checks
 

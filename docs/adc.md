@@ -30,15 +30,36 @@ The multiplier must match the fitted resistor values and should be calibrated on
 
 ## NTC temperature
 
-The reference circuit uses a 10 kOhm NTC and 10 kOhm fixed resistor. With the NTC on the low side:
+The reference circuit uses a 10 kOhm NTC and 10 kOhm fixed resistor, with the **NTC on the high
+side** (`V_CC` to NTC to `PC0` to the fixed 10 kOhm to ground):
 
 $$R_t = 10000 \times \left(\frac{V_{CC}}{V_{NTC}} - 1\right)$$
 
-The resistance is converted with a 0 C to 100 C lookup table and linear interpolation:
+This project (`App/Src/app_adc.c`, `App/Inc/bms_calib.h`) does not evaluate this formula at
+runtime. It converts the raw ADC count directly against a **count-indexed lookup table**,
+`calibNtcCount[101]` (index = degrees C, 0 to 100), with linear interpolation between adjacent
+counts:
 
-$$T = T_i + (T_{i+1} - T_i) \frac{R_t - R_i}{R_{i+1} - R_i}$$
+$$T = i + \frac{count - calibNtcCount[i]}{calibNtcCount[i+1] - calibNtcCount[i]}, \quad
+calibNtcCount[i] \le count < calibNtcCount[i+1]$$
 
-Guard against zero input voltage and invalid resistance. The reference BMS production range is 0 C to 60 C.
+Indexing by count rather than by resistance is deliberate: the divider is ratiometric with
+`VREF+` (tied to `VDDA` on this LQFP64 package), so a count-based table is immune to `VREF`/supply
+tolerance in a way a resistance-based one is not - the supply term cancels before it ever reaches
+the lookup.
+
+The table is derived from Bartek's validated resistance table for the fitted part - 10.0 kOhm at
+25 degC, implying B(0/25) = 3297 and B(25/100) = 3441 - and not from a datasheet curve.
+
+Table anchors (measured, not derived from the formula above): count **1092** at 0 degC, **2048**
+at 25 degC, **3143** at 60 degC, **3728** at 100 degC. A count below 1092 clamps to 0 degC, above
+3728 clamps to 100 degC (`TEMP_MAX_CENTI`). Counts far outside the table (below 200 or above 4000)
+are treated as an open or shorted NTC, not a temperature, and raise `BMS_ERR_TEMP_SENSOR_FAULT`.
+
+Sampling time for all three ADC1 channels (`PC0`, `PC1`, `PC2`) is **239.5 cycles**
+(`ADC_SAMPLETIME_239CYCLES_5`, `Core/Src/adc.c`), not the CubeMX default of 1.5 cycles: 1.5
+cycles cannot charge the sample-and-hold capacitor through a 10 kOhm-plus divider before the
+converter samples, which would bias every channel low.
 
 ## Current
 

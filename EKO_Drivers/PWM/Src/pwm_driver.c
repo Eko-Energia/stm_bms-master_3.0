@@ -35,7 +35,7 @@
  */
 void PWM_Out_setDuty(struct PWM_Out_signal *PWM,float duty)
 {
-	uint32_t pulseValue = (int)round((float)__HAL_TIM_GET_AUTORELOAD(PWM->htim)*(duty/100));
+	uint32_t pulseValue = (uint32_t)roundf((float)__HAL_TIM_GET_AUTORELOAD(PWM->htim) * (duty / 100.0f));
 	PWM->duty = duty;
 	__HAL_TIM_SET_COMPARE(PWM->htim,PWM->Channel,pulseValue);
 }

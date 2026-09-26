@@ -130,8 +130,10 @@ stands. They are recorded here so the spec is not mistaken for implemented behav
 | Topic | This specification | Current project |
 | --- | --- | --- |
 | MCU documentation link | STM32F303K8T6 datasheet | `BMS-Master.ioc` targets STM32F105R8T6 — see [pcb.md](pcb.md) |
-| JK BMS UART | USART1 | `BMS-Master.ioc` configures USART1 on PA9/PA10; [bmsJk.md](bmsJk.md) describes USART2 on PA2/PA3, which is not assigned in the `.ioc` |
+| JK BMS UART | USART1 | `BMS-Master.ioc` configures USART1 on PA9/PA10. [bmsJk.md](bmsJk.md) previously described USART2 on PA2/PA3, which is not assigned in the `.ioc`; it has been corrected. |
 | Analog inputs | PC2 voltage, PC1 current, PC0 temperature | Matches the `.ioc`: PC0 `TEMP`, PC1 `HALL_OUT`, PC2 `VOLTAGE` |
 | Contactor output | PB0 | Matches the `.ioc`: PB0 `RELAY_CTRL` on TIM3_CH3 — see [pwmGeneration.md](pwmGeneration.md) |
+| Pack current range | -300 A to +300 A | +/-350 A on both current signals - see [firmwareSpec.md](firmwareSpec.md) section 7 |
+| Current sign | Positive is discharging | Positive is **charging**, the JK's own sign, on both `BMSMaster_MasterBatteryCurrent` and `BMSMaster_JK_PackCurrent` |
 | Radio link | Required | No radio transceiver logic is present in the clean project |
 | CAN/PWM drivers | `CAN_DRIVER`, `PWM_DRIVER` required; `ADC_DRIVER` forbidden | `EKO_Drivers/CAN` and `EKO_Drivers/PWM` are present; no ADC driver is used — see [adc.md](adc.md) |

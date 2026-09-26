@@ -23,6 +23,50 @@
 #define ERROR_HANDLER_AVAILABLE (0)
 #endif
 
+static HAL_StatusTypeDef applyFilter(CAN_HandleTypeDef *hcanPtr, CAN_FilterTypeDef *f, uint8_t bank)
+{
+	if (hcanPtr == NULL || bank >= CAN_FILTER_BANK_COUNT)
+	{
+		return HAL_ERROR;
+	}
+	f->FilterBank            = bank;
+	f->FilterFIFOAssignment  = CAN_RX_FIFO0;
+	f->FilterActivation      = ENABLE;
+	f->SlaveStartFilterBank  = CAN_SLAVE_START_FILTER_BANK;
+	return HAL_CAN_ConfigFilter(hcanPtr, f);
+}
+
+HAL_StatusTypeDef CAN_ConfigFilterList16(CAN_HandleTypeDef *hcanPtr, uint8_t bank, const uint16_t stdIds[4])
+{
+	if (stdIds == NULL)
+	{
+		return HAL_ERROR;
+	}
+
+	/* In 16-bit list mode each of the four registers holds one standard ID,
+	   left-aligned at bit 5 (STID[10:0] occupies bits 15:5). */
+	CAN_FilterTypeDef f = {0};
+	f.FilterMode      = CAN_FILTERMODE_IDLIST;
+	f.FilterScale     = CAN_FILTERSCALE_16BIT;
+	f.FilterIdHigh     = (uint16_t)(stdIds[0] << 5);
+	f.FilterIdLow      = (uint16_t)(stdIds[1] << 5);
+	f.FilterMaskIdHigh = (uint16_t)(stdIds[2] << 5);
+	f.FilterMaskIdLow  = (uint16_t)(stdIds[3] << 5);
+	return applyFilter(hcanPtr, &f, bank);
+}
+
+HAL_StatusTypeDef CAN_ConfigFilterMask32(CAN_HandleTypeDef *hcanPtr, uint8_t bank, uint16_t stdId, uint16_t stdMask)
+{
+	CAN_FilterTypeDef f = {0};
+	f.FilterMode      = CAN_FILTERMODE_IDMASK;
+	f.FilterScale     = CAN_FILTERSCALE_32BIT;
+	f.FilterIdHigh     = (uint16_t)(stdId << 5);
+	f.FilterIdLow      = 0u;
+	f.FilterMaskIdHigh = (uint16_t)(stdMask << 5);
+	f.FilterMaskIdLow  = 0u;      /* IDE and RTR unmasked; callers bounds-check in software */
+	return applyFilter(hcanPtr, &f, bank);
+}
+
 HAL_StatusTypeDef CAN_Init(CAN_HandleTypeDef *hcanPtr)
 {
 	if (hcanPtr == NULL)
@@ -31,45 +75,33 @@ HAL_StatusTypeDef CAN_Init(CAN_HandleTypeDef *hcanPtr)
 	}
 
 	/*
-	 * Single-CAN configuration (CAN2 removed).
-	 * Accept-all mask on bank 0 → every incoming ID lands in FIFO0.
-	 * SlaveStartFilterBank stays at 14 for backwards-compatibility with any
-	 * future re-introduction of CAN2; it has no effect when CAN2 is disabled.
+	 * NART is only writable while the peripheral is still in initialisation
+	 * mode, that is after HAL_CAN_Init() and before HAL_CAN_Start(), so this
+	 * must stay in this order. Init.AutoRetransmission is kept in sync so a
+	 * later HAL_CAN_Init() does not silently revert it.
 	 */
-	CAN_FilterTypeDef filterConfig = {0};
-
-	filterConfig.FilterBank            = 0;
-	filterConfig.FilterMode            = CAN_FILTERMODE_IDMASK;
-	filterConfig.FilterScale           = CAN_FILTERSCALE_32BIT;
-	filterConfig.FilterIdHigh          = 0x0000;
-	filterConfig.FilterIdLow           = 0x0000;
-	filterConfig.FilterMaskIdHigh      = 0x0000;
-	filterConfig.FilterMaskIdLow       = 0x0000;
-	filterConfig.FilterFIFOAssignment  = CAN_RX_FIFO0;
-	filterConfig.FilterActivation      = ENABLE;
-	filterConfig.SlaveStartFilterBank  = 14;
-
-	if (HAL_CAN_ConfigFilter(hcanPtr, &filterConfig) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+#if (CAN_AUTO_RETRANSMISSION != 0U)
+	CLEAR_BIT(hcanPtr->Instance->MCR, CAN_MCR_NART);
+	hcanPtr->Init.AutoRetransmission = ENABLE;
+#else
+	SET_BIT(hcanPtr->Instance->MCR, CAN_MCR_NART);
+	hcanPtr->Init.AutoRetransmission = DISABLE;
+#endif
 
 	if (HAL_CAN_Start(hcanPtr) != HAL_OK)
 	{
 		return HAL_ERROR;
 	}
-
-	/* RX FIFO0 pending IRQ — thermistor / safe-state frames handled in HAL_CAN_RxFifo0MsgPendingCallback */
-	if (HAL_CAN_ActivateNotification(hcanPtr, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
-
-	return HAL_OK;
+	return HAL_CAN_ActivateNotification(hcanPtr, CAN_IT_RX_FIFO0_MSG_PENDING);
 }
 
 HAL_StatusTypeDef CAN_AddScheduledMsg(struct CAN_scheduledMsg *msg, struct CAN_scheduledMsgList *buffer)
 {
+	if (msg == NULL || buffer == NULL)
+	{
+		return HAL_ERROR;
+	}
+
 	// basic error checking
 	if (buffer->size >= CAN_MAX_MSG)
 	{
@@ -148,34 +180,27 @@ void CAN_HandleScheduled(CAN_HandleTypeDef *hcanPtr, struct CAN_scheduledMsgList
 			if (HAL_CAN_AddTxMessage(hcanPtr, &msg->header, data, &scheduler->txMailbox) != HAL_OK)
 			{
 				/*
-				 * No free mailbox, or the peripheral is not ready. Re-arm so this
-				 * message waits a full period before trying again - leaving
-				 * lastTick stale would make the branch above true on every main
-				 * loop iteration and turn the period into a busy retry. Skip only
-				 * this message, so one blocked frame cannot starve the rest.
+				 * No free mailbox. Leave lastTick alone so the frame stays due
+				 * and retries on the next pass; re-arming it would skip the slot
+				 * and silence the frame for a whole period. Only three mailboxes
+				 * exist, so a burst drains across successive passes.
 				 */
-				msg->lastTick = currentTick;
 
-				// saturate rather than wrap, so CAN_TX_FAIL_LIMIT stays
-				// usable over its whole range instead of being capped by the
-				// width of the counter
-				if (msg->txFailCount < UINT32_MAX)
+				// count missed periods, not passes: ordinary contention frees a
+				// mailbox in microseconds and must not reach CAN_TX_FAIL_LIMIT
+				const uint32_t missedPeriods = (currentTick - msg->lastTick) / msg->periodMs;
+				if (missedPeriods > msg->txFailCount)
 				{
-					msg->txFailCount++;
-				}
+					msg->txFailCount = missedPeriods;
 
-				/*
-				 * All three mailboxes stuck for several periods in a row. With
-				 * automatic retransmission enabled an unacknowledged frame is
-				 * retried forever and never releases its mailbox, so drop the
-				 * pending requests to let the queue drain. On a mailbox that is
-				 * mid-transmission the abort takes effect at the end of the
-				 * current attempt.
-				 */
-				if ((CAN_TX_FAIL_LIMIT != 0U) && (msg->txFailCount >= CAN_TX_FAIL_LIMIT))
-				{
-					HAL_CAN_AbortTxRequest(hcanPtr, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
-					msg->txFailCount = 0;
+					// blocked for CAN_TX_FAIL_LIMIT periods: with automatic
+					// retransmission an unacknowledged frame keeps its mailbox
+					// forever, so drop the pending requests. The compare above
+					// limits this to one abort per period.
+					if ((CAN_TX_FAIL_LIMIT != 0U) && (msg->txFailCount >= CAN_TX_FAIL_LIMIT))
+					{
+						HAL_CAN_AbortTxRequest(hcanPtr, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);
+					}
 				}
 
 				continue;
